@@ -16,4 +16,5 @@ queries against that type schema.
    parser
    extension
    validator
+   cost
    other
