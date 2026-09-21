@@ -109,12 +109,29 @@ from .resolve_schema_coordinate import (
     ResolvedSchemaElement,
 )
 
+# Estimate the static cost of an operation for admission control.
+# (Imported last, since it depends on the validation module.)
+from .query_cost import (
+    DEFAULT_COST_LIMIT,
+    DEFAULT_EFFORT_LIMIT,
+    MAX_LIST_MULTIPLIER,
+    QueryCostError,
+    QueryCostExceededError,
+    assert_cost_within_budget,
+    estimate_query_cost,
+)
+
 __all__ = [
+    "DEFAULT_COST_LIMIT",
+    "DEFAULT_EFFORT_LIMIT",
+    "MAX_LIST_MULTIPLIER",
     "BreakingChange",
     "BreakingChangeType",
     "DangerousChange",
     "DangerousChangeType",
     "IntrospectionQuery",
+    "QueryCostError",
+    "QueryCostExceededError",
     "ResolvedDirective",
     "ResolvedDirectiveArgument",
     "ResolvedEnumValue",
@@ -128,6 +145,7 @@ __all__ = [
     "SchemaChange",
     "TypeInfo",
     "TypeInfoVisitor",
+    "assert_cost_within_budget",
     "ast_from_value",
     "ast_to_dict",
     "build_ast_schema",
@@ -137,6 +155,7 @@ __all__ = [
     "coerce_input_value",
     "concat_ast",
     "do_types_overlap",
+    "estimate_query_cost",
     "extend_schema",
     "find_breaking_changes",
     "find_dangerous_changes",

@@ -185,6 +185,11 @@ from .utilities import (
     IntrospectionQuery,
     # Get the target Operation from a Document.
     get_operation_ast,
+    # Estimate the static cost of an operation for admission control.
+    estimate_query_cost,
+    assert_cost_within_budget,
+    QueryCostError,
+    QueryCostExceededError,
     # Convert a GraphQLSchema to an IntrospectionQuery.
     introspection_from_schema,
     # Build a GraphQLSchema from an introspection result.
@@ -744,6 +749,8 @@ __all__ = [
     "PossibleFragmentSpreadsRule",
     "PossibleTypeExtensionsRule",
     "ProvidedRequiredArgumentsRule",
+    "QueryCostError",
+    "QueryCostExceededError",
     "ResolvedDirective",
     "ResolvedDirectiveArgument",
     "ResolvedEnumValue",
@@ -820,6 +827,7 @@ __all__ = [
     "assert_abstract_type",
     "assert_argument",
     "assert_composite_type",
+    "assert_cost_within_budget",
     "assert_directive",
     "assert_enum_type",
     "assert_enum_value",
@@ -856,6 +864,7 @@ __all__ = [
     "default_harness",
     "default_type_resolver",
     "do_types_overlap",
+    "estimate_query_cost",
     "execute",
     "execute_root_selection_set",
     "execute_subscription_event",

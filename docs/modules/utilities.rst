@@ -18,6 +18,13 @@ Get the target Operation from a Document:
 
 .. autofunction:: get_operation_ast
 
+Estimate the static cost of an operation for admission control:
+
+.. autofunction:: estimate_query_cost
+.. autofunction:: assert_cost_within_budget
+.. autoexception:: QueryCostError
+.. autoexception:: QueryCostExceededError
+
 Convert a GraphQLSchema to an IntrospectionQuery:
 
 .. autofunction:: introspection_from_schema

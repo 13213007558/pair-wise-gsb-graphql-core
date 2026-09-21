@@ -7,10 +7,11 @@ queries against that type schema.
 .. toctree::
    :maxdepth: 2
 
-   schema
-   resolvers
-   queries
-   sdl
+  schema
+  resolvers
+  queries
+  query_cost
+  sdl
    methods
    introspection
    parser
