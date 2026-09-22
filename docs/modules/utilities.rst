@@ -43,6 +43,11 @@ Sort a GraphQLSchema:
 
 .. autofunction:: lexicographic_sort_schema
 
+Project a GraphQLSchema to a subset of its schema coordinates:
+
+.. autofunction:: project_schema
+.. autoclass:: SchemaProjectionError
+
 Print a GraphQLSchema to GraphQL Schema language:
 
 .. autofunction:: print_introspection_schema
