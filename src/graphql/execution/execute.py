@@ -977,6 +977,7 @@ def execute(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
+    max_cost: Optional[int] = None,
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a GraphQL operation.
 
@@ -984,6 +985,11 @@ def execute(
 
     Returns an ExecutionResult (if all encountered resolvers are synchronous),
     or a coroutine object eventually yielding an ExecutionResult.
+
+    If ``max_cost`` is given, a static cost analysis is run after coercion of
+    the variable values but before any field resolver is called. When the
+    operation exceeds the budget, no resolver is called and the cost budget
+    error is returned in the ExecutionResult.
 
     If the arguments to this function do not result in a legal execution context,
     a GraphQLError will be thrown immediately explaining the invalid input.
@@ -1013,6 +1019,21 @@ def execute(
     # Return early errors if execution context failed.
     if isinstance(exe_context, list):
         return ExecutionResult(data=None, errors=exe_context)
+
+    # Check the static cost budget before invoking any field resolver.
+    if max_cost is not None:
+        from ..utilities.cost_analysis import assert_within_cost_budget
+
+        try:
+            assert_within_cost_budget(
+                schema,
+                document,
+                max_cost,
+                exe_context.variable_values,
+                operation_name,
+            )
+        except GraphQLError as error:
+            return ExecutionResult(data=None, errors=[error])
 
     # Return a possible coroutine object that will eventually yield the data described
     # by the "Response" section of the GraphQL specification.
@@ -1065,6 +1086,7 @@ def execute_sync(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     check_sync: bool = False,
+    max_cost: Optional[int] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -1094,6 +1116,7 @@ def execute_sync(
         middleware,
         execution_context_class,
         is_awaitable,
+        max_cost,
     )
 
     # Assert that the execution was synchronous.

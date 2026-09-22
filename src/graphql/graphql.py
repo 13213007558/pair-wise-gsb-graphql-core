@@ -28,6 +28,7 @@ async def graphql(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type[ExecutionContext]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
+    max_cost: Optional[int] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation asynchronously.
 
@@ -73,6 +74,9 @@ async def graphql(
       The execution context class to use to build the context
     :arg is_awaitable:
       The predicate to be used for checking whether values are awaitable
+    :arg max_cost:
+      Optional static cost budget. When set, the operation is rejected before
+      any resolver runs if its computed cost exceeds the budget.
     """
     # Always return asynchronously for a consistent API.
     result = graphql_impl(
@@ -87,6 +91,7 @@ async def graphql(
         middleware,
         execution_context_class,
         is_awaitable,
+        max_cost,
     )
 
     if isawaitable(result):
@@ -112,6 +117,7 @@ def graphql_sync(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type[ExecutionContext]] = None,
     check_sync: bool = False,
+    max_cost: Optional[int] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -139,6 +145,7 @@ def graphql_sync(
         middleware,
         execution_context_class,
         is_awaitable,
+        max_cost,
     )
 
     # Assert that the execution was synchronous.
@@ -161,6 +168,7 @@ def graphql_impl(
     middleware: Optional[Middleware],
     execution_context_class: Optional[Type[ExecutionContext]],
     is_awaitable: Optional[Callable[[Any], bool]],
+    max_cost: Optional[int],
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a query, return asynchronously only if necessary."""
     # Validate Schema
@@ -195,4 +203,5 @@ def graphql_impl(
         middleware,
         execution_context_class,
         is_awaitable,
+        max_cost,
     )

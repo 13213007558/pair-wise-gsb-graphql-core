@@ -58,6 +58,17 @@ from .type_info import TypeInfo, TypeInfoVisitor
 # Coerce a Python value to a GraphQL type, or produce errors.
 from .coerce_input_value import coerce_input_value
 
+# Pre-execution query cost analysis.
+from .cost_analysis import (
+    CostAnalysisError,
+    CostBudgetExceededError,
+    CostAnalysisResult,
+    get_operation_cost,
+    cost_analysis,
+    assert_within_cost_budget,
+    check_cost_budget,
+)
+
 # Concatenate multiple ASTs together.
 from .concat_ast import concat_ast
 
@@ -99,6 +110,13 @@ __all__ = [
     "build_client_schema",
     "build_schema",
     "coerce_input_value",
+    "CostAnalysisError",
+    "CostBudgetExceededError",
+    "CostAnalysisResult",
+    "cost_analysis",
+    "get_operation_cost",
+    "assert_within_cost_budget",
+    "check_cost_budget",
     "concat_ast",
     "do_types_overlap",
     "extend_schema",
