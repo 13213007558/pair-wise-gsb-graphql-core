@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import TypeAlias
 
 import pytest
 
 from graphql import graphql_sync
 from graphql.error import GraphQLSyntaxError
-from graphql.language import parse, print_ast
+from graphql.language import (
+    DirectiveLocation,
+    DocumentNode,
+    FieldDefinitionNode,
+    NamedTypeNode,
+    NameNode,
+    ObjectTypeExtensionNode,
+    SourceLocation,
+    parse,
+    print_ast,
+)
 from graphql.type import (
     GraphQLArgument,
     GraphQLBoolean,
@@ -27,6 +38,7 @@ from graphql.type import (
     assert_object_type,
     assert_scalar_type,
     assert_union_type,
+    is_non_null_type,
     specified_directives,
     validate_schema,
 )
@@ -35,8 +47,11 @@ from graphql.utilities import (
     build_schema,
     concat_ast,
     extend_schema,
+    introspection_from_schema,
+    lexicographic_sort_schema,
     print_schema,
 )
+from graphql.validation.validate import validate_sdl
 
 from ..utils import dedent
 
@@ -1694,3 +1709,387 @@ extend directive @isDeprecated @deprecated(reason: "use another directive")
                     experimental_directives_on_directive_definitions=True,
                 )
             assert str(exc_info.value).startswith("Syntax Error: Unexpected <EOF>.")
+
+
+def describe_extend_schema_from_multiple_sources():
+    def produces_equivalent_schemas_via_sdl_and_ast_paths():
+        schema = build_schema("type Query { a: String }")
+        printed_before = print_schema(schema)
+
+        sdl_extension = parse("extend type Query { added: String }")
+        ast_extension = DocumentNode(
+            definitions=(
+                ObjectTypeExtensionNode(
+                    name=NameNode(value="Query"),
+                    fields=(
+                        FieldDefinitionNode(
+                            name=NameNode(value="added"),
+                            type=NamedTypeNode(name=NameNode(value="String")),
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        extended_via_sdl = extend_schema(schema, sdl_extension)
+        extended_via_ast = extend_schema(schema, ast_extension)
+
+        assert print_schema(extended_via_sdl) == print_schema(extended_via_ast)
+        assert "added: String" in print_schema(extended_via_ast)
+
+        # neither path polluted the input schema
+        assert print_schema(schema) == printed_before
+
+    def extending_the_same_ast_multiple_times_is_reproducible():
+        schema = build_schema("type Query { a: String }")
+        extend_ast = parse("extend type Query { b: Int }")
+        printed_ast = print_ast(extend_ast)
+
+        first = extend_schema(schema, extend_ast)
+        second = extend_schema(schema, extend_ast)
+
+        assert first is not second
+        assert print_schema(first) == print_schema(second)
+        assert introspection_from_schema(first) == introspection_from_schema(second)
+
+        # the reused AST was not polluted by the extensions
+        assert print_ast(extend_ast) == printed_ast
+
+    def produces_equivalent_schemas_regardless_of_extension_order():
+        schema = build_schema("type Query { a: String }")
+        plugin_a = parse(
+            dedent(
+                """
+                directive @tag(name: String!) repeatable on OBJECT
+
+                extend type Query @tag(name: "a") { alpha: String }
+                """
+            )
+        )
+        plugin_b = parse(
+            dedent(
+                """
+                extend type Query { beta: Int }
+
+                extend schema { mutation: Mutation }
+
+                type Mutation { m: String }
+                """
+            )
+        )
+
+        extended_ab = extend_schema(extend_schema(schema, plugin_a), plugin_b)
+        extended_ba = extend_schema(extend_schema(schema, plugin_b), plugin_a)
+
+        sorted_ab = print_schema(lexicographic_sort_schema(extended_ab))
+        sorted_ba = print_schema(lexicographic_sort_schema(extended_ba))
+        assert sorted_ab == sorted_ba
+
+        combined_ab = extend_schema(schema, concat_ast([plugin_a, plugin_b]))
+        combined_ba = extend_schema(schema, concat_ast([plugin_b, plugin_a]))
+        assert print_schema(lexicographic_sort_schema(combined_ab)) == sorted_ab
+        assert print_schema(lexicographic_sort_schema(combined_ba)) == sorted_ab
+
+        # both orders accumulated the same fields and schema extensions
+        assert list(extended_ab.query_type.fields) == ["a", "alpha", "beta"]
+        assert list(extended_ba.query_type.fields) == ["a", "beta", "alpha"]
+        assert extended_ab.mutation_type.name == "Mutation"
+        assert extended_ba.mutation_type.name == "Mutation"
+        assert len(extended_ab.extension_ast_nodes) == 1
+        assert len(extended_ba.extension_ast_nodes) == 1
+
+    def rejects_unknown_directives_and_keeps_the_input_schema_unchanged():
+        schema = build_schema("type Query { a: String }")
+        printed_before = print_schema(schema)
+        introspection_before = introspection_from_schema(schema)
+
+        extend_ast = parse("extend type Query @unknown { b: Int }")
+
+        [error] = validate_sdl(extend_ast, schema)
+        assert error.message == "Unknown directive '@unknown'."
+        assert error.locations == [SourceLocation(1, 19)]
+
+        with pytest.raises(TypeError) as exc_info:
+            extend_schema(schema, extend_ast)
+        assert str(exc_info.value) == "Unknown directive '@unknown'."
+
+        # the failed extension did not pollute the input schema
+        assert print_schema(schema) == printed_before
+        assert introspection_from_schema(schema) == introspection_before
+
+        # and the schema can still be extended afterwards
+        extended = extend_schema(schema, parse("extend type Query { b: Int }"))
+        assert "b: Int" in print_schema(extended)
+
+    def rejects_duplicate_argument_defaults_and_keeps_the_input_schema_unchanged():
+        schema = build_schema("type Query { f(x: Int = 1): String }")
+        printed_before = print_schema(schema)
+
+        extend_ast = parse("extend type Query { g(x: Int = 1, x: Int = 2): String }")
+
+        [error] = validate_sdl(extend_ast, schema)
+        assert error.message == "Argument 'Query.g(x:)' can only be defined once."
+        assert error.locations == [SourceLocation(1, 23), SourceLocation(1, 35)]
+
+        with pytest.raises(TypeError) as exc_info:
+            extend_schema(schema, extend_ast)
+        assert str(exc_info.value) == (
+            "Argument 'Query.g(x:)' can only be defined once."
+        )
+
+        # the failed extension did not pollute the input schema
+        assert print_schema(schema) == printed_before
+
+        # including the default value of the existing argument
+        extended = extend_schema(schema, parse("extend type Query { g: Int }"))
+        default = extended.query_type.fields["f"].args["x"].default
+        assert print_ast(default.literal) == "1"
+
+    def does_not_allow_an_extension_to_override_an_argument_default():
+        schema = build_schema("type Query { f(x: Int = 1): String }")
+        printed_before = print_schema(schema)
+
+        with pytest.raises(TypeError) as exc_info:
+            extend_schema(schema, parse("extend type Query { f(x: Int = 2): String }"))
+        assert str(exc_info.value).startswith(
+            "Field 'Query.f' already exists in the schema."
+        )
+
+        # the later definition did not silently overwrite the default
+        assert print_schema(schema) == printed_before
+
+    def rejects_conflicting_type_definitions_from_plugins_in_any_order():
+        schema = build_schema("type Query { a: String }")
+        printed_before = print_schema(schema)
+        plugin_one = parse("type Conflict { x: String }")
+        plugin_two = parse("type Conflict { y: Int }")
+
+        for document in (
+            concat_ast([plugin_one, plugin_two]),
+            concat_ast([plugin_two, plugin_one]),
+        ):
+            [error] = validate_sdl(document, schema)
+            assert error.message == "There can be only one type named 'Conflict'."
+            assert error.locations == [SourceLocation(1, 6), SourceLocation(1, 6)]
+
+            with pytest.raises(TypeError) as exc_info:
+                extend_schema(schema, document)
+            assert str(exc_info.value) == (
+                "There can be only one type named 'Conflict'."
+            )
+
+        # sequential application of the plugins fails as well
+        extended = extend_schema(schema, plugin_one)
+        printed_extended = print_schema(extended)
+        with pytest.raises(TypeError) as exc_info:
+            extend_schema(extended, plugin_two)
+        assert str(exc_info.value).startswith(
+            "Type 'Conflict' already exists in the schema."
+        )
+
+        # neither failure polluted the input schemas
+        assert print_schema(schema) == printed_before
+        assert print_schema(extended) == printed_extended
+
+    def rejects_redefinition_of_an_existing_directive():
+        schema = build_schema(
+            "directive @tag(name: String!) repeatable on OBJECT\n"
+            "type Query { a: String }"
+        )
+        printed_before = print_schema(schema)
+
+        extend_ast = parse("directive @tag(name: Int!) on FIELD_DEFINITION")
+
+        [error] = validate_sdl(extend_ast, schema)
+        assert error.message == (
+            "Directive '@tag' already exists in the schema. It cannot be redefined."
+        )
+        assert error.locations == [SourceLocation(1, 12)]
+
+        with pytest.raises(TypeError) as exc_info:
+            extend_schema(schema, extend_ast)
+        assert str(exc_info.value) == (
+            "Directive '@tag' already exists in the schema. It cannot be redefined."
+        )
+
+        # the later definition did not silently overwrite the directive
+        assert print_schema(schema) == printed_before
+        tag = schema.get_directive("tag")
+        assert tag.is_repeatable is True
+        assert tag.locations == (DirectiveLocation.OBJECT,)
+
+    def builds_the_final_definition_of_a_repeatable_directive():
+        schema = build_schema("type Query { a: String }")
+        extend_ast = parse(
+            dedent(
+                '''
+                """Tags a type."""
+                directive @tag(name: String!, priority: Int = 0) repeatable
+                  on OBJECT | INTERFACE
+
+                extend type Query @tag(name: "first")
+                '''
+            )
+        )
+        extended = extend_schema(schema, extend_ast)
+        extended = extend_schema(
+            extended, parse('extend type Query @tag(name: "second")')
+        )
+
+        tag = extended.get_directive("tag")
+        assert tag.name == "tag"
+        assert tag.description == "Tags a type."
+        assert tag.is_repeatable is True
+        assert tag.locations == (DirectiveLocation.OBJECT, DirectiveLocation.INTERFACE)
+        name_arg = tag.args["name"]
+        assert is_non_null_type(name_arg.type)
+        assert name_arg.type.of_type is GraphQLString
+        assert name_arg.default is None
+        priority_arg = tag.args["priority"]
+        assert priority_arg.type == GraphQLInt
+        assert print_ast(priority_arg.default.literal) == "0"
+
+        # both applications were accumulated instead of overwritten
+        applied = [
+            print_ast(directive)
+            for node in (
+                extended.query_type.ast_node,
+                *extended.query_type.extension_ast_nodes,
+            )
+            for directive in node.directives or ()
+        ]
+        assert applied == ['@tag(name: "first")', '@tag(name: "second")']
+
+        # introspection exposes the final directive definition
+        [introspected] = [
+            directive
+            for directive in introspection_from_schema(extended)["__schema"][
+                "directives"
+            ]
+            if directive["name"] == "tag"
+        ]
+        assert introspected["isRepeatable"] is True
+        assert introspected["locations"] == ["OBJECT", "INTERFACE"]
+        assert [arg["name"] for arg in introspected["args"]] == ["name", "priority"]
+
+    def rejects_a_non_repeatable_directive_applied_twice():
+        schema = build_schema("directive @once on OBJECT\ntype Query { a: String }")
+        printed_before = print_schema(schema)
+
+        extend_ast = parse("extend type Query @once @once")
+
+        [error] = validate_sdl(extend_ast, schema)
+        assert error.message == (
+            "The directive '@once' can only be used once at this location."
+        )
+        assert error.locations == [SourceLocation(1, 19), SourceLocation(1, 25)]
+
+        with pytest.raises(TypeError) as exc_info:
+            extend_schema(schema, extend_ast)
+        assert str(exc_info.value) == (
+            "The directive '@once' can only be used once at this location."
+        )
+
+        assert print_schema(schema) == printed_before
+
+    def keeps_description_and_deprecation_reproducible_in_introspection():
+        schema = build_schema(
+            dedent(
+                '''
+                """Schema description."""
+                schema { query: Query }
+
+                type Query {
+                  old: String @deprecated(reason: "Use new")
+                  new: String
+                }
+                '''
+            )
+        )
+        extend_ast = parse("extend type Query { extra: Int }")
+
+        first = extend_schema(schema, extend_ast)
+        second = extend_schema(schema, extend_ast)
+
+        assert first.description == "Schema description."
+        assert second.description == "Schema description."
+
+        introspection = introspection_from_schema(first)
+        assert introspection == introspection_from_schema(second)
+        assert introspection["__schema"]["description"] == "Schema description."
+
+        [query_type] = [
+            type_
+            for type_ in introspection["__schema"]["types"]
+            if type_["name"] == "Query"
+        ]
+        [old_field] = [
+            field for field in query_type["fields"] if field["name"] == "old"
+        ]
+        assert old_field["isDeprecated"] is True
+        assert old_field["deprecationReason"] == "Use new"
+
+    def supports_print_and_rebuild_round_trips():
+        schema = build_schema("type Query { a: String }")
+        extended = extend_schema(
+            schema,
+            parse(
+                dedent(
+                    """
+                    directive @tag(name: String!) repeatable on OBJECT
+
+                    extend type Query @tag(name: "one") { b(x: Int = 3): Int }
+                    """
+                )
+            ),
+        )
+
+        printed = print_schema(extended)
+        rebuilt = build_schema(printed)
+        assert print_schema(rebuilt) == printed
+
+        # extending the rebuilt schema yields the same result
+        # as extending the original extended schema
+        further = parse('extend type Query @tag(name: "two")')
+        assert print_schema(extend_schema(rebuilt, further)) == print_schema(
+            extend_schema(extended, further)
+        )
+
+    def supports_concurrent_read_only_use_while_extending():
+        schema = build_schema(
+            dedent(
+                """
+                type Query { a: String }
+
+                type Mutation { m: String }
+                """
+            )
+        )
+        extend_ast = parse("extend type Query { b: Int }")
+
+        expected_print = print_schema(schema)
+        expected_introspection = introspection_from_schema(schema)
+
+        def read_schema():
+            for _ in range(10):
+                assert print_schema(schema) == expected_print
+                assert introspection_from_schema(schema) == expected_introspection
+                assert validate_schema(schema) == []
+
+        def extend_schema_repeatedly():
+            for _ in range(10):
+                extended = extend_schema(schema, extend_ast)
+                assert "b: Int" in print_schema(extended)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(read_schema),
+                executor.submit(read_schema),
+                executor.submit(read_schema),
+                executor.submit(extend_schema_repeatedly),
+            ]
+            for future in futures:
+                future.result()
+
+        # the concurrent extensions did not pollute the input schema
+        assert print_schema(schema) == expected_print
