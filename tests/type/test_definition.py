@@ -1541,6 +1541,22 @@ def describe_type_system_input_objects():
             assert input_field.ast_node is None
             assert input_field.out_name is None
 
+        def accepts_an_input_object_type_as_one_of():
+            input_obj_type = GraphQLInputObjectType(
+                "SomeInputObject",
+                {"f": GraphQLInputField(ScalarType)},
+                is_one_of=True,
+            )
+            assert input_obj_type.is_one_of is True
+            assert input_obj_type.to_kwargs()["is_one_of"] is True
+
+        def defaults_an_input_object_type_to_not_one_of():
+            input_obj_type = GraphQLInputObjectType(
+                "SomeInputObject", {"f": GraphQLInputField(ScalarType)}
+            )
+            assert input_obj_type.is_one_of is False
+            assert input_obj_type.to_kwargs()["is_one_of"] is False
+
         def rejects_an_input_object_type_with_incorrectly_typed_name():
             with raises(TypeError, match="missing .* required .* 'name'"):
                 # noinspection PyArgumentList

@@ -249,6 +249,80 @@ def describe_coerce_input_value():
             result = _coerce_value({"real": 1, "imag": 2}, ComplexInputObject)
             assert expect_value(result) == 1 + 2j
 
+    def describe_for_one_of_input_object():
+        TestOneOfInputObject = GraphQLInputObjectType(
+            "TestOneOfInputObject",
+            {
+                "foo": GraphQLInputField(GraphQLInt),
+                "bar": GraphQLInputField(GraphQLInt),
+            },
+            is_one_of=True,
+        )
+
+        def returns_no_error_for_exactly_one_field():
+            result = _coerce_value({"foo": 123}, TestOneOfInputObject)
+            assert expect_value(result) == {"foo": 123}
+
+        def returns_an_error_for_more_than_one_field():
+            result = _coerce_value({"foo": 123, "bar": 456}, TestOneOfInputObject)
+            assert expect_errors(result) == [
+                (
+                    "Exactly one key must be specified"
+                    " for OneOf type 'TestOneOfInputObject'.",
+                    [],
+                    {"foo": 123, "bar": 456},
+                )
+            ]
+
+        def returns_an_error_for_no_fields():
+            result = _coerce_value({}, TestOneOfInputObject)
+            assert expect_errors(result) == [
+                (
+                    "Exactly one key must be specified"
+                    " for OneOf type 'TestOneOfInputObject'.",
+                    [],
+                    {},
+                )
+            ]
+
+        def returns_an_error_for_an_explicit_null_value():
+            result = _coerce_value({"foo": None}, TestOneOfInputObject)
+            assert expect_errors(result) == [
+                ("Field 'foo' must be non-null.", [], {"foo": None})
+            ]
+
+        def returns_an_error_for_a_non_dict_value():
+            result = _coerce_value(123, TestOneOfInputObject)
+            assert expect_errors(result) == [
+                ("Expected type 'TestOneOfInputObject' to be a mapping.", [], 123)
+            ]
+
+        def applies_the_same_rules_when_nested():
+            NestedInputObject = GraphQLInputObjectType(
+                "NestedInputObject",
+                {"oneOf": GraphQLInputField(TestOneOfInputObject)},
+            )
+            result = _coerce_value({"oneOf": {"foo": None}}, NestedInputObject)
+            assert expect_errors(result) == [
+                (
+                    "Field 'foo' must be non-null.",
+                    ["oneOf"],
+                    {"foo": None},
+                )
+            ]
+
+        def applies_the_same_rules_inside_lists():
+            ListOfOneOf = GraphQLList(TestOneOfInputObject)
+            result = _coerce_value([{"foo": 1}, {}], ListOfOneOf)
+            assert expect_errors(result) == [
+                (
+                    "Exactly one key must be specified"
+                    " for OneOf type 'TestOneOfInputObject'.",
+                    [1],
+                    {},
+                )
+            ]
+
     def describe_for_graphql_input_object_with_default_value():
         def _get_test_input_object(default_value):
             return GraphQLInputObjectType(

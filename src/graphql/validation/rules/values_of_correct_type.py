@@ -1,4 +1,4 @@
-from typing import cast, Any
+from typing import cast, Any, Dict
 
 from ...error import GraphQLError
 from ...language import (
@@ -6,12 +6,15 @@ from ...language import (
     EnumValueNode,
     FloatValueNode,
     IntValueNode,
+    NonNullTypeNode,
     NullValueNode,
     ListValueNode,
     ObjectFieldNode,
     ObjectValueNode,
     StringValueNode,
     ValueNode,
+    VariableDefinitionNode,
+    VariableNode,
     VisitorAction,
     SKIP,
     print_ast,
@@ -28,7 +31,7 @@ from ...type import (
     is_non_null_type,
     is_required_input_field,
 )
-from . import ValidationRule
+from . import ValidationContext, ValidationRule
 
 __all__ = ["ValuesOfCorrectTypeRule"]
 
@@ -41,6 +44,20 @@ class ValuesOfCorrectTypeRule(ValidationRule):
 
     See https://spec.graphql.org/draft/#sec-Values-of-Correct-Type
     """
+
+    variable_definitions: Dict[str, VariableDefinitionNode]
+
+    def __init__(self, context: ValidationContext) -> None:
+        super().__init__(context)
+        self.variable_definitions = {}
+
+    def enter_operation_definition(self, *_args: Any) -> None:
+        self.variable_definitions.clear()
+
+    def enter_variable_definition(
+        self, node: VariableDefinitionNode, *_args: Any
+    ) -> None:
+        self.variable_definitions[node.variable.name.value] = node
 
     def enter_list_value(self, node: ListValueNode, *_args: Any) -> VisitorAction:
         # Note: TypeInfo will traverse into a list's item type, so look to the parent
@@ -70,7 +87,52 @@ class ValuesOfCorrectTypeRule(ValidationRule):
                         node,
                     )
                 )
+        if type_.is_one_of:
+            self.validate_one_of_input_object(type_, node, field_node_map)
         return None
+
+    def validate_one_of_input_object(
+        self,
+        type_: GraphQLInputObjectType,
+        node: ObjectValueNode,
+        field_node_map: Dict[str, ObjectFieldNode],
+    ) -> None:
+        keys = list(field_node_map)
+        if len(keys) != 1:
+            self.report_error(
+                GraphQLError(
+                    f"OneOf Input Object '{type_.name}'"
+                    " must specify exactly one key.",
+                    node,
+                )
+            )
+            return
+
+        value = node.fields[0].value
+
+        if isinstance(value, NullValueNode):
+            self.report_error(
+                GraphQLError(
+                    f"Field '{type_.name}.{keys[0]}' must be non-null.", value
+                )
+            )
+            return
+
+        if isinstance(value, VariableNode):
+            variable_name = value.name.value
+            definition = self.variable_definitions.get(variable_name)
+            if definition is None:
+                return
+            is_nullable_variable = not isinstance(definition.type, NonNullTypeNode)
+            contains_default = definition.default_value is not None
+            if not is_nullable_variable or contains_default:
+                self.report_error(
+                    GraphQLError(
+                        f"Variable '${variable_name}' must be nullable"
+                        " and must not have a default value.",
+                        value,
+                    )
+                )
 
     def enter_object_field(self, node: ObjectFieldNode, *_args: Any) -> None:
         parent_type = get_named_type(self.context.get_parent_input_type())

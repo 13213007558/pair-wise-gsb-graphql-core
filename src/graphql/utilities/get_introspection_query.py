@@ -34,17 +34,20 @@ def get_introspection_query(
     directive_is_repeatable: bool = False,
     schema_description: bool = False,
     input_value_deprecation: bool = False,
+    one_of: bool = False,
 ) -> str:
     """Get a query for introspection.
 
     Optionally, you can exclude descriptions, include specification URLs,
     include repeatability of directives, and specify whether to include
-    the schema description as well.
+    the schema description as well, whether to include deprecation of input values,
+    and whether to include the `isOneOf` field on input object types.
     """
     maybe_description = "description" if descriptions else ""
     maybe_specified_by_url = "specifiedByURL" if specified_by_url else ""
     maybe_directive_is_repeatable = "isRepeatable" if directive_is_repeatable else ""
     maybe_schema_description = maybe_description if schema_description else ""
+    maybe_one_of = "isOneOf" if one_of else ""
 
     def input_deprecation(string: str) -> Optional[str]:
         return string if input_value_deprecation else ""
@@ -77,6 +80,7 @@ def get_introspection_query(
           name
           {maybe_description}
           {maybe_specified_by_url}
+          {maybe_one_of}
           fields(includeDeprecated: true) {{
             name
             {maybe_description}
@@ -243,6 +247,7 @@ class IntrospectionEnumType(WithName):
 class IntrospectionInputObjectType(WithName):
     kind: Literal["input_object"]
     inputFields: List[IntrospectionInputValue]
+    isOneOf: Optional[bool]
 
 
 IntrospectionType = Union[

@@ -14,6 +14,7 @@ from graphql.type import (
     GraphQLFloat,
     GraphQLInputField,
     GraphQLInputObjectType,
+    GraphQLInt,
     GraphQLList,
     GraphQLNonNull,
     GraphQLObjectType,
@@ -86,6 +87,15 @@ TestNestedInputObject = GraphQLInputObjectType(
     },
 )
 
+TestOneOfInputObject = GraphQLInputObjectType(
+    "TestOneOfInputObject",
+    {
+        "string": GraphQLInputField(GraphQLString),
+        "int": GraphQLInputField(GraphQLInt),
+    },
+    is_one_of=True,
+)
+
 
 TestEnum = GraphQLEnumType(
     "TestEnum",
@@ -135,6 +145,9 @@ TestType = GraphQLObjectType(
         ),
         "fieldWithNestedInputObject": field_with_input_arg(
             GraphQLArgument(TestNestedInputObject, default_value="Hello World")
+        ),
+        "fieldWithOneOfInput": field_with_input_arg(
+            GraphQLArgument(TestOneOfInputObject)
         ),
         "list": field_with_input_arg(GraphQLArgument(GraphQLList(GraphQLString))),
         "nnList": field_with_input_arg(
@@ -510,6 +523,75 @@ def describe_execute_handles_inputs():
                         }
                     ],
                 )
+
+    def describe_handles_one_of_input_objects():
+        doc = """
+            query ($input: TestOneOfInputObject) {
+              fieldWithOneOfInput(input: $input)
+            }
+            """
+
+        def executes_with_exactly_one_field():
+            result = execute_query(doc, {"input": {"string": "x"}})
+
+            assert result == ({"fieldWithOneOfInput": "{'string': 'x'}"}, None)
+
+        def errors_when_more_than_one_field_is_provided():
+            params = {"input": {"string": "x", "int": 1}}
+            result = execute_query(doc, params)
+
+            assert result == (
+                None,
+                [
+                    {
+                        "message": "Variable '$input' got invalid value"
+                        " {'string': 'x', 'int': 1}; Exactly one key must be"
+                        " specified for OneOf type 'TestOneOfInputObject'.",
+                        "locations": [(2, 20)],
+                    }
+                ],
+            )
+
+        def errors_when_no_field_is_provided():
+            result = execute_query(doc, {"input": {}})
+
+            assert result == (
+                None,
+                [
+                    {
+                        "message": "Variable '$input' got invalid value {};"
+                        " Exactly one key must be specified"
+                        " for OneOf type 'TestOneOfInputObject'.",
+                        "locations": [(2, 20)],
+                    }
+                ],
+            )
+
+        def errors_when_the_only_field_is_explicit_null():
+            result = execute_query(doc, {"input": {"string": None}})
+
+            assert result == (
+                None,
+                [
+                    {
+                        "message": "Variable '$input' got invalid value"
+                        " {'string': None}; Field 'string' must be non-null.",
+                        "locations": [(2, 20)],
+                    }
+                ],
+            )
+
+        def does_not_treat_an_unprovided_variable_as_a_selected_field():
+            result = execute_query(
+                """
+                query q($string: String) {
+                  fieldWithOneOfInput(input: {string: $string})
+                }
+                """,
+                {},
+            )  # Intentionally missing variable values.
+
+            assert result == ({"fieldWithOneOfInput": "{}"}, None)
 
     def describe_handles_custom_enum_values():
         def allows_custom_enum_values_as_inputs():

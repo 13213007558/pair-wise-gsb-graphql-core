@@ -61,6 +61,11 @@ def describe_get_introspection_query():
         ExcpectIntrospectionQuery(specified_by_url=True).to_match("specifiedByURL")
         ExcpectIntrospectionQuery(specified_by_url=False).to_not_match("specifiedByURL")
 
+    def includes_is_one_of_field_on_input_objects():
+        ExcpectIntrospectionQuery().to_not_match("isOneOf")
+        ExcpectIntrospectionQuery(one_of=True).to_match("isOneOf")
+        ExcpectIntrospectionQuery(one_of=False).to_not_match("isOneOf")
+
     def includes_is_deprecated_field_on_input_values():
         ExcpectIntrospectionQuery().to_match("isDeprecated", 2)
         ExcpectIntrospectionQuery(input_value_deprecation=True).to_match(

@@ -964,6 +964,122 @@ def describe_type_system_input_objects_must_have_fields():
         ]
 
 
+def describe_type_system_one_of_input_objects_must_be_valid():
+    def accepts_a_one_of_input_object_with_nullable_fields_without_defaults():
+        schema = build_schema(
+            """
+            type Query {
+              field(arg: SomeInputObject): String
+            }
+
+            input SomeInputObject @oneOf {
+              string: String
+              int: Int
+            }
+            """
+        )
+        assert validate_schema(schema) == []
+
+    def rejects_a_one_of_input_object_with_missing_fields():
+        schema = build_schema(
+            """
+            type Query {
+              field(arg: SomeInputObject): String
+            }
+
+            input SomeInputObject @oneOf
+            """
+        )
+        assert validate_schema(schema) == [
+            {
+                "message": "OneOf Input Object type SomeInputObject"
+                " must define one or more fields.",
+                "locations": [(6, 13)],
+            }
+        ]
+
+    def rejects_a_one_of_input_object_with_non_null_fields():
+        schema = build_schema(
+            """
+            type Query {
+              field(arg: SomeInputObject): String
+            }
+
+            input SomeInputObject @oneOf {
+              string: String
+              nonNullString: String!
+            }
+            """
+        )
+        assert validate_schema(schema) == [
+            {
+                "message": "OneOf Input Object field"
+                " SomeInputObject.nonNullString must be nullable.",
+                "locations": [(8, 30)],
+            }
+        ]
+
+    def rejects_a_one_of_input_object_with_field_default_values():
+        schema = build_schema(
+            """
+            type Query {
+              field(arg: SomeInputObject): String
+            }
+
+            input SomeInputObject @oneOf {
+              string: String = "default"
+            }
+            """
+        )
+        assert validate_schema(schema) == [
+            {
+                "message": "OneOf Input Object field SomeInputObject.string"
+                " cannot have a default value.",
+                "locations": [(7, 32)],
+            }
+        ]
+
+    def rejects_a_python_built_one_of_input_object_with_invalid_fields():
+        schema = GraphQLSchema(
+            query=GraphQLObjectType(
+                "Query",
+                {
+                    "field": GraphQLField(
+                        GraphQLString,
+                        args={
+                            "arg": GraphQLArgument(
+                                GraphQLInputObjectType(
+                                    "SomeInputObject",
+                                    {
+                                        "nonNullString": GraphQLInputField(
+                                            GraphQLNonNull(GraphQLString)
+                                        ),
+                                        "withDefault": GraphQLInputField(
+                                            GraphQLString, default_value="default"
+                                        ),
+                                    },
+                                    is_one_of=True,
+                                )
+                            )
+                        },
+                    )
+                },
+            )
+        )
+        assert validate_schema(schema) == [
+            {
+                "message": "OneOf Input Object field"
+                " SomeInputObject.nonNullString must be nullable.",
+                "locations": None,
+            },
+            {
+                "message": "OneOf Input Object field SomeInputObject.withDefault"
+                " cannot have a default value.",
+                "locations": None,
+            },
+        ]
+
+
 def describe_type_system_enum_types_must_be_well_defined():
     def rejects_an_enum_type_without_values():
         schema = build_schema(

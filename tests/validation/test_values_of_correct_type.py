@@ -10,6 +10,7 @@ from graphql.type import (
     GraphQLString,
 )
 from graphql.validation import ValuesOfCorrectTypeRule
+from graphql.utilities import build_schema
 
 from .harness import assert_validation_errors
 
@@ -1267,4 +1268,120 @@ def describe_validate_values_of_correct_type():
                         "locations": [(2, 58)],
                     },
                 ],
+            )
+
+    def describe_one_of_input_objects():
+        schema = build_schema(
+            """
+            input OneOfInput @oneOf {
+              string: String
+              int: Int
+            }
+
+            input NestedInput {
+              oneOf: OneOfInput
+            }
+
+            type Query {
+              test(arg: OneOfInput, nested: NestedInput, list: [OneOfInput]): String
+            }
+            """
+        )
+
+        def valid_with_exactly_one_field():
+            assert_valid('{ test(arg: {string: "x"}) }', schema=schema)
+
+        def valid_with_a_nullable_variable_without_default():
+            assert_valid(
+                "query ($var: String) { test(arg: {string: $var}) }", schema=schema
+            )
+
+        def invalid_with_more_than_one_field():
+            assert_errors(
+                '{ test(arg: {string: "x", int: 1}) }',
+                [
+                    {
+                        "message": "OneOf Input Object 'OneOfInput'"
+                        " must specify exactly one key.",
+                        "locations": [(1, 13)],
+                    },
+                ],
+                schema=schema,
+            )
+
+        def invalid_with_no_fields():
+            assert_errors(
+                "{ test(arg: {}) }",
+                [
+                    {
+                        "message": "OneOf Input Object 'OneOfInput'"
+                        " must specify exactly one key.",
+                        "locations": [(1, 13)],
+                    },
+                ],
+                schema=schema,
+            )
+
+        def invalid_with_explicit_null_value():
+            assert_errors(
+                "{ test(arg: {string: null}) }",
+                [
+                    {
+                        "message": "Field 'OneOfInput.string' must be non-null.",
+                        "locations": [(1, 22)],
+                    },
+                ],
+                schema=schema,
+            )
+
+        def invalid_with_non_null_variable():
+            assert_errors(
+                "query ($var: String!) { test(arg: {string: $var}) }",
+                [
+                    {
+                        "message": "Variable '$var' must be nullable"
+                        " and must not have a default value.",
+                        "locations": [(1, 44)],
+                    },
+                ],
+                schema=schema,
+            )
+
+        def invalid_with_variable_with_default_value():
+            assert_errors(
+                'query ($var: String = "x") { test(arg: {string: $var}) }',
+                [
+                    {
+                        "message": "Variable '$var' must be nullable"
+                        " and must not have a default value.",
+                        "locations": [(1, 49)],
+                    },
+                ],
+                schema=schema,
+            )
+
+        def applies_the_same_rules_when_nested():
+            assert_errors(
+                "{ test(nested: {oneOf: {}}) }",
+                [
+                    {
+                        "message": "OneOf Input Object 'OneOfInput'"
+                        " must specify exactly one key.",
+                        "locations": [(1, 24)],
+                    },
+                ],
+                schema=schema,
+            )
+
+        def applies_the_same_rules_inside_lists():
+            assert_errors(
+                '{ test(list: [{string: "x"}, {}]) }',
+                [
+                    {
+                        "message": "OneOf Input Object 'OneOfInput'"
+                        " must specify exactly one key.",
+                        "locations": [(1, 30)],
+                    },
+                ],
+                schema=schema,
             )

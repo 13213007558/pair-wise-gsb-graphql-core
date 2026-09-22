@@ -12,7 +12,7 @@ from typing import (
 )
 
 from ..error import GraphQLError
-from ..pyutils import inspect
+from ..pyutils import inspect, Undefined
 from ..language import (
     DirectiveNode,
     InputValueDefinitionNode,
@@ -25,6 +25,7 @@ from ..language import (
 from .definition import (
     GraphQLEnumType,
     GraphQLInputField,
+    GraphQLInputFieldMap,
     GraphQLInputObjectType,
     GraphQLInterfaceType,
     GraphQLObjectType,
@@ -464,7 +465,8 @@ class SchemaValidationContext:
 
         if not fields:
             self.report_error(
-                f"Input Object type {input_obj.name}"
+                f"{'OneOf Input Object' if input_obj.is_one_of else 'Input Object'}"
+                f" type {input_obj.name}"
                 " must define one or more fields.",
                 [input_obj.ast_node, *input_obj.extension_ast_nodes],
             )
@@ -491,6 +493,29 @@ class SchemaValidationContext:
                         get_deprecated_directive_node(field.ast_node),
                         field.ast_node and field.ast_node.type,
                     ],
+                )
+
+        if input_obj.is_one_of:
+            self.validate_one_of_input_object_fields(input_obj, fields)
+
+    def validate_one_of_input_object_fields(
+        self, input_obj: GraphQLInputObjectType, fields: GraphQLInputFieldMap
+    ) -> None:
+        for field_name, field in fields.items():
+            # Ensure the fields are nullable.
+            if is_non_null_type(field.type):
+                self.report_error(
+                    f"OneOf Input Object field {input_obj.name}.{field_name}"
+                    " must be nullable.",
+                    field.ast_node.type if field.ast_node else None,
+                )
+
+            # Ensure the fields have no default values.
+            if field.default_value is not Undefined:
+                self.report_error(
+                    f"OneOf Input Object field {input_obj.name}.{field_name}"
+                    " cannot have a default value.",
+                    field.ast_node.default_value if field.ast_node else None,
                 )
 
 

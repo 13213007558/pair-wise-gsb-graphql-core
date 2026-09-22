@@ -229,6 +229,17 @@ def describe_introspection():
                                 "deprecationReason": None,
                             },
                             {
+                                "name": "isOneOf",
+                                "args": [],
+                                "type": {
+                                    "kind": "SCALAR",
+                                    "name": "Boolean",
+                                    "ofType": None,
+                                },
+                                "isDeprecated": False,
+                                "deprecationReason": None,
+                            },
+                            {
                                 "name": "fields",
                                 "args": [
                                     {
@@ -980,6 +991,12 @@ def describe_introspection():
                                 },
                             }
                         ],
+                    },
+                    {
+                        "name": "oneOf",
+                        "isRepeatable": False,
+                        "locations": ["INPUT_OBJECT"],
+                        "args": [],
                     },
                 ],
             }

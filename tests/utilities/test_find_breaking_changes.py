@@ -2,6 +2,7 @@ from graphql.type import (
     GraphQLSchema,
     GraphQLDeprecatedDirective,
     GraphQLIncludeDirective,
+    GraphQLOneOfDirective,
     GraphQLSkipDirective,
     GraphQLSpecifiedByDirective,
 )
@@ -824,7 +825,11 @@ def describe_find_breaking_changes():
             (
                 BreakingChangeType.DIRECTIVE_REMOVED,
                 f"{GraphQLDeprecatedDirective.name} was removed.",
-            )
+            ),
+            (
+                BreakingChangeType.DIRECTIVE_REMOVED,
+                f"{GraphQLOneOfDirective.name} was removed.",
+            ),
         ]
 
     def should_detect_if_a_directive_argument_was_removed():

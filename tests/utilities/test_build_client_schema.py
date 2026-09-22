@@ -9,6 +9,7 @@ from graphql.type import (
     GraphQLField,
     GraphQLFloat,
     GraphQLID,
+    GraphQLInputObjectType,
     GraphQLInt,
     GraphQLObjectType,
     GraphQLSchema,
@@ -466,6 +467,30 @@ def describe_type_system_build_schema_from_introspection():
         )
 
         assert cycle_introspection(sdl) == sdl
+
+    def builds_a_schema_with_a_one_of_input_object():
+        sdl = dedent(
+            """
+            input Lookup @oneOf {
+              id: ID
+              email: String
+            }
+
+            type Query {
+              find(lookup: Lookup): String
+            }
+            """
+        )
+
+        assert cycle_introspection(sdl) == sdl
+
+        server_schema = build_schema(sdl)
+        client_schema = build_client_schema(
+            introspection_from_schema(server_schema)
+        )
+        lookup_type = client_schema.get_type("Lookup")
+        assert isinstance(lookup_type, GraphQLInputObjectType)
+        assert lookup_type.is_one_of is True
 
     def builds_a_schema_with_custom_directives():
         sdl = dedent(

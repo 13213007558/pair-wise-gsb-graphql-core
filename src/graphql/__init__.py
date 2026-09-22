@@ -256,6 +256,7 @@ from .type import (
     GraphQLSkipDirective,
     GraphQLDeprecatedDirective,
     GraphQLSpecifiedByDirective,
+    GraphQLOneOfDirective,
     # "Enum" of Type Kinds
     TypeKind,
     # Constant Deprecation Reason
@@ -485,6 +486,7 @@ __all__ = [
     "GraphQLSkipDirective",
     "GraphQLDeprecatedDirective",
     "GraphQLSpecifiedByDirective",
+    "GraphQLOneOfDirective",
     "TypeKind",
     "DEFAULT_DEPRECATION_REASON",
     "introspection_types",

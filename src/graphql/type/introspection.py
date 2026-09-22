@@ -247,6 +247,7 @@ __Type: GraphQLObjectType = GraphQLObjectType(
         "specifiedByURL": GraphQLField(
             GraphQLString, resolve=TypeResolvers.specified_by_url
         ),
+        "isOneOf": GraphQLField(GraphQLBoolean, resolve=TypeResolvers.is_one_of),
         "fields": GraphQLField(
             GraphQLList(GraphQLNonNull(__Field)),
             args={
@@ -320,6 +321,12 @@ class TypeResolvers:
     @staticmethod
     def specified_by_url(type_, _info):
         return getattr(type_, "specified_by_url", None)
+
+    @staticmethod
+    def is_one_of(type_, _info):
+        if is_input_object_type(type_):
+            return type_.is_one_of
+        return None
 
     # noinspection PyPep8Naming
     @staticmethod

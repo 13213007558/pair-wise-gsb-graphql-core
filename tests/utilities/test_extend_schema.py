@@ -328,6 +328,80 @@ def describe_extend_schema():
             ),
         )
 
+    def extends_inputs_to_one_of_input_objects():
+        schema = build_schema(
+            """
+            type Query {
+              someInput(arg: SomeInput): String
+            }
+
+            input SomeInput {
+              oldField: String
+            }
+            """
+        )
+        extend_ast = parse(
+            """
+            extend input SomeInput @oneOf {
+              newField: String
+            }
+            """
+        )
+        extended_schema = extend_schema(schema, extend_ast)
+
+        assert validate_schema(extended_schema) == []
+        some_input = assert_input_object_type(extended_schema.get_type("SomeInput"))
+        assert some_input.is_one_of is True
+        expect_schema_changes(
+            schema,
+            extended_schema,
+            dedent(
+                """
+                input SomeInput @oneOf {
+                  oldField: String
+                  newField: String
+                }
+                """
+            ),
+        )
+
+    def maintains_one_of_input_objects():
+        schema = build_schema(
+            """
+            type Query {
+              someInput(arg: SomeInput): String
+            }
+
+            input SomeInput @oneOf {
+              oldField: String
+            }
+            """
+        )
+        extend_ast = parse(
+            """
+            extend input SomeInput {
+              newField: String
+            }
+            """
+        )
+        extended_schema = extend_schema(schema, extend_ast)
+
+        assert validate_schema(extended_schema) == []
+        some_input = assert_input_object_type(extended_schema.get_type("SomeInput"))
+        assert some_input.is_one_of is True
+        expect_schema_changes(
+            schema,
+            extended_schema,
+            dedent(
+                """
+                input SomeInput @oneOf {
+                  oldField: String
+                  newField: String
+                }
+                """
+            ),
+        )
+
     def extends_scalars_by_adding_new_directives():
         schema = build_schema(
             """

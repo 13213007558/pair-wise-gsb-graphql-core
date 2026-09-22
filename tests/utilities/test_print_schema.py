@@ -511,6 +511,22 @@ def describe_type_system_printer():
             """
         )
 
+    def prints_one_of_input_type():
+        input_type = GraphQLInputObjectType(
+            name="InputType",
+            fields={"int": GraphQLInputField(GraphQLInt)},
+            is_one_of=True,
+        )
+
+        schema = GraphQLSchema(types=[input_type])
+        assert expect_printed_schema(schema) == dedent(
+            """
+            input InputType @oneOf {
+              int: Int
+            }
+            """
+        )
+
     def prints_custom_scalar():
         odd_type = GraphQLScalarType(name="Odd")
 
@@ -674,6 +690,11 @@ def describe_type_system_printer():
             ) on SCALAR
 
             """
+            Indicates exactly one field must be supplied and this field must not be `null`.
+            """
+            directive @oneOf on INPUT_OBJECT
+
+            """
             A GraphQL Schema defines the capabilities of a GraphQL server. It exposes all available types and directives on the server, as well as the entry points for query, mutation, and subscription operations.
             """
             type __Schema {
@@ -709,6 +730,7 @@ def describe_type_system_printer():
               name: String
               description: String
               specifiedByURL: String
+              isOneOf: Boolean
               fields(includeDeprecated: Boolean = false): [__Field!]
               interfaces: [__Type!]
               possibleTypes: [__Type!]
