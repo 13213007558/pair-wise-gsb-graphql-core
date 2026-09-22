@@ -949,6 +949,15 @@ class Executor(Generic[TContext]):
             abort = ensure_future(abort_signal.wait())
             try:
                 await wait({task, abort}, return_when=FIRST_COMPLETED)
+            except BaseException:
+                # The await itself was cancelled (e.g. the subscription client
+                # went away): cancel the underlying work and let it settle
+                # before propagating, so that no pending task is orphaned and
+                # the source iterator can still be closed afterwards.
+                task.cancel()
+                with suppress(BaseException):
+                    await task
+                raise
             finally:
                 if not abort.done():
                     abort.cancel()
