@@ -3227,6 +3227,62 @@ def describe_execute_stream_directive():
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
 
+    async def streams_the_same_list_field_under_two_aliases():
+        """Streams one list field under two aliases with distinct labels"""
+        document = parse(
+            """
+            query {
+              first: friendList @stream(label: "firstStream", initialCount: 1) {
+                id
+              }
+              second: friendList @stream(label: "secondStream", initialCount: 0) {
+                id
+              }
+            }
+            """
+        )
+
+        async def friend_list(_info):
+            await sleep(0)
+            return friends
+
+        execute_result = await experimental_execute_incrementally(  # type: ignore
+            schema, document, {"friendList": friend_list}
+        )
+        assert isinstance(execute_result, ExperimentalIncrementalExecutionResults)
+        iterator = execute_result.subsequent_results
+
+        result1 = execute_result.initial_result
+        assert result1 == {
+            "data": {"first": [{"id": "1"}], "second": []},
+            "pending": [
+                {"id": "0", "path": ["first"], "label": "firstStream"},
+                {"id": "1", "path": ["second"], "label": "secondStream"},
+            ],
+            "hasNext": True,
+        }
+
+        results = [result.formatted async for result in iterator]
+
+        # both aliases stream independently and the stream terminates
+        assert results[-1]["hasNext"] is False
+        assert all(result["hasNext"] is True for result in results[:-1])
+
+        incremental = [
+            entry for result in results for entry in result.get("incremental", [])
+        ]
+        completed = [
+            entry for result in results for entry in result.get("completed", [])
+        ]
+
+        # each aliased stream delivers its remaining items exactly once
+        assert incremental == [
+            {"items": [{"id": "2"}, {"id": "3"}], "id": "0"},
+            {"items": [{"id": "1"}, {"id": "2"}, {"id": "3"}], "id": "1"},
+        ]
+        # every announced pending group completes exactly once, without errors
+        assert completed == [{"id": "0"}, {"id": "1"}]
+
 
 user_type = GraphQLObjectType("User", {"id": GraphQLField(GraphQLID)})
 
