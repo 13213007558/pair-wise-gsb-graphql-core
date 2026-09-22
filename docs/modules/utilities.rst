@@ -112,3 +112,11 @@ Compare two GraphQLSchemas and detect breaking changes:
 .. autoclass:: BreakingChangeType
 .. autoclass:: DangerousChange
 .. autoclass:: DangerousChangeType
+
+Compare two GraphQLSchemas and detect applied directive changes:
+
+.. autofunction:: find_applied_directive_changes
+
+.. autoclass:: AppliedDirectiveChange
+.. autoclass:: AppliedDirectiveChangeType
+.. autoclass:: AppliedDirectiveChanges

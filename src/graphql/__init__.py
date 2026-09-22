@@ -225,6 +225,11 @@ from .utilities import (
     DangerousChangeType,
     find_breaking_changes,
     find_dangerous_changes,
+    # Compare two GraphQLSchemas and detect applied directive changes.
+    AppliedDirectiveChange,
+    AppliedDirectiveChangeType,
+    AppliedDirectiveChanges,
+    find_applied_directive_changes,
 )
 
 # Create and operate on GraphQL type definitions and schema.
@@ -771,6 +776,10 @@ __all__ = [
     "is_valid_name_error",
     "find_breaking_changes",
     "find_dangerous_changes",
+    "find_applied_directive_changes",
+    "AppliedDirectiveChange",
+    "AppliedDirectiveChangeType",
+    "AppliedDirectiveChanges",
     "BreakingChange",
     "BreakingChangeType",
     "DangerousChange",

@@ -84,7 +84,18 @@ from .find_breaking_changes import (
     find_dangerous_changes,
 )
 
+# Compare two GraphQLSchemas and detect applied directive changes.
+from .find_applied_directive_changes import (
+    AppliedDirectiveChange,
+    AppliedDirectiveChangeType,
+    AppliedDirectiveChanges,
+    find_applied_directive_changes,
+)
+
 __all__ = [
+    "AppliedDirectiveChange",
+    "AppliedDirectiveChangeType",
+    "AppliedDirectiveChanges",
     "BreakingChange",
     "BreakingChangeType",
     "DangerousChange",
@@ -102,6 +113,7 @@ __all__ = [
     "concat_ast",
     "do_types_overlap",
     "extend_schema",
+    "find_applied_directive_changes",
     "find_breaking_changes",
     "find_dangerous_changes",
     "get_introspection_query",
