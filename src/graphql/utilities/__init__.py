@@ -84,11 +84,22 @@ from .find_breaking_changes import (
     find_dangerous_changes,
 )
 
+# Compare applied directives of two GraphQLSchemas.
+from .find_directive_usage_changes import (
+    DirectiveUsageChange,
+    DirectiveUsageChanges,
+    DirectiveUsageChangeType,
+    find_directive_usage_changes,
+)
+
 __all__ = [
     "BreakingChange",
     "BreakingChangeType",
     "DangerousChange",
     "DangerousChangeType",
+    "DirectiveUsageChange",
+    "DirectiveUsageChanges",
+    "DirectiveUsageChangeType",
     "IntrospectionQuery",
     "TypeInfo",
     "TypeInfoVisitor",
@@ -104,6 +115,7 @@ __all__ = [
     "extend_schema",
     "find_breaking_changes",
     "find_dangerous_changes",
+    "find_directive_usage_changes",
     "get_introspection_query",
     "get_operation_ast",
     "get_operation_root_type",

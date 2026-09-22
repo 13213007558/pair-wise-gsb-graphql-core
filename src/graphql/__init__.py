@@ -221,10 +221,14 @@ from .utilities import (
     # Compare two GraphQLSchemas and detect breaking changes.
     BreakingChange,
     BreakingChangeType,
+    DirectiveUsageChange,
+    DirectiveUsageChanges,
+    DirectiveUsageChangeType,
     DangerousChange,
     DangerousChangeType,
     find_breaking_changes,
     find_dangerous_changes,
+    find_directive_usage_changes,
 )
 
 # Create and operate on GraphQL type definitions and schema.
@@ -771,10 +775,14 @@ __all__ = [
     "is_valid_name_error",
     "find_breaking_changes",
     "find_dangerous_changes",
+    "find_directive_usage_changes",
     "BreakingChange",
     "BreakingChangeType",
     "DangerousChange",
     "DangerousChangeType",
+    "DirectiveUsageChange",
+    "DirectiveUsageChanges",
+    "DirectiveUsageChangeType",
     "Undefined",
     "UndefinedType",
 ]
