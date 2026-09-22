@@ -949,6 +949,14 @@ class Executor(Generic[TContext]):
             abort = ensure_future(abort_signal.wait())
             try:
                 await wait({task, abort}, return_when=FIRST_COMPLETED)
+            except BaseException:
+                # The surrounding execution was cancelled while waiting
+                # (e.g. an aborted stream cancelled its producer task);
+                # the wrapped awaitable must not be left behind unsettled.
+                task.cancel()
+                with suppress(BaseException):
+                    await task
+                raise
             finally:
                 if not abort.done():
                     abort.cancel()
