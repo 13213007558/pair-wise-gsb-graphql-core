@@ -91,29 +91,82 @@ def coerce_input_value(
 
         coerced_dict: Dict[str, Any] = {}
         fields = type_.fields
+        provided_field_names = [
+            field_name for field_name in input_value if field_name in fields
+        ]
 
-        for field_name, field in fields.items():
-            field_value = input_value.get(field_name, Undefined)
-
-            if field_value is Undefined:
-                if field.default_value is not Undefined:
-                    # Use out name as name if it exists (extension of GraphQL.js).
-                    coerced_dict[field.out_name or field_name] = field.default_value
-                elif is_non_null_type(field.type):  # pragma: no cover else
-                    type_str = inspect(field.type)
+        if type_.is_one_of:
+            if len(provided_field_names) != 1:
+                if not provided_field_names:
                     on_error(
                         path.as_list() if path else [],
                         input_value,
                         GraphQLError(
-                            f"Field '{field_name}' of required type '{type_str}'"
-                            " was not provided."
+                            f"OneOf Input Object '{type_.name}'"
+                            " must specify exactly one field."
                         ),
                     )
-                continue
+                else:
+                    quoted_field_names = ", ".join(
+                        f"'{field_name}'" for field_name in provided_field_names
+                    )
+                    on_error(
+                        path.as_list() if path else [],
+                        input_value,
+                        GraphQLError(
+                            f"OneOf Input Object '{type_.name}' must specify exactly"
+                            f" one field, got multiple fields: {quoted_field_names}."
+                        ),
+                    )
+                return Undefined
 
+            field_name = provided_field_names[0]
+            field = fields[field_name]
+            field_value = input_value[field_name]
+            if field_value is None:
+                on_error(
+                    (path.as_list() if path else []) + [field_name],
+                    field_value,
+                    GraphQLError(
+                        f"OneOf Input Object '{type_.name}'"
+                        " must specify exactly one non-null field."
+                    ),
+                )
+                return Undefined
             coerced_dict[field.out_name or field_name] = coerce_input_value(
-                field_value, field.type, on_error, Path(path, field_name, type_.name)
+                field_value,
+                field.type,
+                on_error,
+                Path(path, field_name, type_.name),
             )
+        else:
+            for field_name, field in fields.items():
+                field_value = input_value.get(field_name, Undefined)
+
+                if field_value is Undefined:
+                    if field.default_value is not Undefined:
+                        # Use out name as name if it exists (extension of GraphQL.js).
+                        coerced_dict[field.out_name or field_name] = (
+                            field.default_value
+                        )
+                    elif is_non_null_type(field.type):  # pragma: no cover else
+                        type_str = inspect(field.type)
+                        on_error(
+                            path.as_list() if path else [],
+                            input_value,
+                            GraphQLError(
+                                f"Field '{field_name}' of required type '{type_str}'"
+                                " was not provided."
+                            ),
+                        )
+                    continue
+
+                coerced_dict[field.out_name or field_name] = coerce_input_value(
+                    field_value,
+                    field.type,
+                    on_error,
+                    Path(path, field_name, type_.name),
+                )
 
         # Ensure every provided field is defined.
         for field_name in input_value:

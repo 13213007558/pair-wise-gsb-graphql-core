@@ -823,7 +823,11 @@ def describe_find_breaking_changes():
         assert find_breaking_changes(old_schema, new_schema) == [
             (
                 BreakingChangeType.DIRECTIVE_REMOVED,
-                f"{GraphQLDeprecatedDirective.name} was removed.",
+                GraphQLDeprecatedDirective.name + " was removed.",
+            ),
+            (
+                BreakingChangeType.DIRECTIVE_REMOVED,
+                "oneOf was removed.",
             )
         ]
 

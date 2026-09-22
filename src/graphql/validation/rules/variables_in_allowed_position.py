@@ -8,8 +8,15 @@ from ...language import (
     VariableDefinitionNode,
 )
 from ...pyutils import Undefined
-from ...type import GraphQLNonNull, GraphQLSchema, GraphQLType, is_non_null_type
-from ...utilities import type_from_ast, is_type_sub_type_of
+from ...type import (
+    GraphQLNonNull,
+    GraphQLSchema,
+    GraphQLType,
+    get_named_type,
+    is_input_object_type,
+    is_non_null_type,
+)
+from ...utilities import is_type_sub_type_of, type_from_ast
 from . import ValidationContext, ValidationRule
 
 __all__ = ["VariablesInAllowedPositionRule"]
@@ -37,8 +44,7 @@ class VariablesInAllowedPositionRule(ValidationRule):
         usages = self.context.get_recursive_variable_usages(operation)
 
         for usage in usages:
-            node, type_ = usage.node, usage.type
-            default_value = usage.default_value
+            node, type_, default_value, parent_type = usage
             var_name = node.name.value
             var_def = var_def_map.get(var_name)
             if var_def and type_:
@@ -50,7 +56,12 @@ class VariablesInAllowedPositionRule(ValidationRule):
                 schema = self.context.schema
                 var_type = type_from_ast(schema, var_def.type)
                 if var_type and not allowed_variable_usage(
-                    schema, var_type, var_def.default_value, type_, default_value
+                    schema,
+                    var_type,
+                    var_def.default_value,
+                    type_,
+                    default_value,
+                    parent_type,
                 ):
                     self.report_error(
                         GraphQLError(
@@ -72,6 +83,7 @@ def allowed_variable_usage(
     var_default_value: Optional[ValueNode],
     location_type: GraphQLType,
     location_default_value: Any,
+    parent_type: Optional[GraphQLType] = None,
 ) -> bool:
     """Check for allowed variable usage.
 
@@ -79,6 +91,12 @@ def allowed_variable_usage(
     considering if default values exist for either the variable or the location at which
     it is located.
     """
+    parent_input_type = get_named_type(parent_type)
+    if is_input_object_type(parent_input_type) and parent_input_type.is_one_of:
+        return is_non_null_type(var_type) and is_type_sub_type_of(
+            schema, var_type, location_type
+        )
+
     if is_non_null_type(location_type) and not is_non_null_type(var_type):
         has_non_null_variable_default_value = (
             var_default_value is not None

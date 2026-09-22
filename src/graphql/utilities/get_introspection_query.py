@@ -104,6 +104,7 @@ def get_introspection_query(
           possibleTypes {{
             ...TypeRef
           }}
+          isOneOf
         }}
 
         fragment InputValue on __InputValue {{
@@ -243,6 +244,7 @@ class IntrospectionEnumType(WithName):
 class IntrospectionInputObjectType(WithName):
     kind: Literal["input_object"]
     inputFields: List[IntrospectionInputValue]
+    isOneOf: bool
 
 
 IntrospectionType = Union[

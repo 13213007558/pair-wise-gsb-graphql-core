@@ -223,6 +223,7 @@ def build_client_schema(
         return GraphQLInputObjectType(
             name=input_object_introspection["name"],
             description=input_object_introspection.get("description"),
+            is_one_of=bool(input_object_introspection.get("isOneOf")),
             fields=lambda: build_input_value_def_map(
                 input_object_introspection["inputFields"]
             ),

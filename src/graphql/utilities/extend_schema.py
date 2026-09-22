@@ -61,6 +61,7 @@ from ..type import (
     GraphQLNamedType,
     GraphQLNonNull,
     GraphQLNullableType,
+    GraphQLOneOfDirective,
     GraphQLObjectType,
     GraphQLOutputType,
     GraphQLScalarType,
@@ -237,10 +238,14 @@ def extend_schema_impl(
     ) -> GraphQLInputObjectType:
         kwargs = type_.to_kwargs()
         extensions = tuple(type_extensions_map[kwargs["name"]])
+        is_one_of = kwargs["is_one_of"] or any(
+            get_one_of_input(extension) for extension in extensions
+        )
 
         return GraphQLInputObjectType(
             **merge_kwargs(
                 kwargs,
+                is_one_of=is_one_of,
                 fields=lambda: {
                     **{
                         name: GraphQLInputField(
@@ -602,6 +607,7 @@ def extend_schema_impl(
         return GraphQLInputObjectType(
             name=ast_node.name.value,
             description=ast_node.description.value if ast_node.description else None,
+            is_one_of=get_one_of_input(ast_node),
             fields=lambda: build_input_field_map(all_nodes),
             ast_node=ast_node,
             extension_ast_nodes=extension_nodes,
@@ -698,3 +704,12 @@ def get_specified_by_url(
 
     specified_by_url = get_directive_values(GraphQLSpecifiedByDirective, node)
     return specified_by_url["url"] if specified_by_url else None
+
+
+def get_one_of_input(
+    node: Union[InputObjectTypeDefinitionNode, InputObjectTypeExtensionNode]
+) -> bool:
+    """Given an input object node, determine whether it is a OneOf type."""
+    from ..execution import get_directive_values
+
+    return get_directive_values(GraphQLOneOfDirective, node) is not None

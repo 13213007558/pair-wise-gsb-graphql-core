@@ -674,6 +674,11 @@ def describe_type_system_printer():
             ) on SCALAR
 
             """
+            Indicates that exactly one of the fields defined by the input object type must be supplied.
+            """
+            directive @oneOf on INPUT_OBJECT
+
+            """
             A GraphQL Schema defines the capabilities of a GraphQL server. It exposes all available types and directives on the server, as well as the entry points for query, mutation, and subscription operations.
             """
             type __Schema {
@@ -714,6 +719,9 @@ def describe_type_system_printer():
               possibleTypes: [__Type!]
               enumValues(includeDeprecated: Boolean = false): [__EnumValue!]
               inputFields(includeDeprecated: Boolean = false): [__InputValue!]
+
+              """Whether type is a OneOf type, as specified by the OneOf RFC."""
+              isOneOf: Boolean!
               ofType: __Type
             }
 

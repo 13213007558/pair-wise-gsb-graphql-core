@@ -12,7 +12,7 @@ from typing import (
 )
 
 from ..error import GraphQLError
-from ..pyutils import inspect
+from ..pyutils import Undefined, inspect
 from ..language import (
     DirectiveNode,
     InputValueDefinitionNode,
@@ -483,7 +483,24 @@ class SchemaValidationContext:
                     field.ast_node.type if field.ast_node else None,
                 )
 
-            if is_required_input_field(field) and field.deprecation_reason is not None:
+            if input_obj.is_one_of:
+                if is_non_null_type(field.type):
+                    self.report_error(
+                        f"OneOf input field {input_obj.name}.{field_name}"
+                        " must be nullable.",
+                        field.ast_node and field.ast_node.type,
+                    )
+                if field.default_value is not Undefined:
+                    self.report_error(
+                        f"OneOf input field {input_obj.name}.{field_name}"
+                        " must not have a default value.",
+                        field.ast_node,
+                    )
+
+            if (
+                is_required_input_field(field)
+                and field.deprecation_reason is not None
+            ):
                 self.report_error(
                     f"Required input field {input_obj.name}.{field_name}"
                     " cannot be deprecated.",

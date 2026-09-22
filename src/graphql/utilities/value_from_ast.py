@@ -106,6 +106,27 @@ def value_from_ast(
         coerced_obj: Dict[str, Any] = {}
         fields = type_.fields
         field_nodes = {field.name.value: field for field in value_node.fields}
+        if type_.is_one_of:
+            selected_field_nodes = [
+                field_node
+                for field_node in value_node.fields
+                if field_node.name.value in fields
+                and not is_missing_variable(field_node.value, variables)
+            ]
+            if len(selected_field_nodes) != 1:
+                return Undefined
+
+            field_node = selected_field_nodes[0]
+            field_name = field_node.name.value
+            field = fields[field_name]
+            if isinstance(field_node.value, NullValueNode):
+                return Undefined
+            field_value = value_from_ast(field_node.value, field.type, variables)
+            if field_value is Undefined or field_value is None:
+                return Undefined
+            coerced_obj[field.out_name or field_name] = field_value
+            return type_.out_type(coerced_obj)
+
         for field_name, field in fields.items():
             field_node = field_nodes.get(field_name)
             if not field_node or is_missing_variable(field_node.value, variables):

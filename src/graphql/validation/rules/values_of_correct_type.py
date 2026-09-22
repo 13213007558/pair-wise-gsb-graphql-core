@@ -6,8 +6,8 @@ from ...language import (
     EnumValueNode,
     FloatValueNode,
     IntValueNode,
-    NullValueNode,
     ListValueNode,
+    NullValueNode,
     ObjectFieldNode,
     ObjectValueNode,
     StringValueNode,
@@ -57,19 +57,47 @@ class ValuesOfCorrectTypeRule(ValidationRule):
             self.is_valid_value_node(node)
             return SKIP  # Don't traverse further.
         type_ = cast(GraphQLInputObjectType, type_)
-        # Ensure every required field exists.
         field_node_map = {field.name.value: field for field in node.fields}
-        for field_name, field_def in type_.fields.items():
-            field_node = field_node_map.get(field_name)
-            if not field_node and is_required_input_field(field_def):
-                field_type = field_def.type
-                self.report_error(
-                    GraphQLError(
-                        f"Field '{type_.name}.{field_name}' of required type"
-                        f" '{field_type}' was not provided.",
-                        node,
+        if type_.is_one_of:
+            field_nodes = [
+                field_node
+                for field_node in node.fields
+                if field_node.name.value in type_.fields
+            ]
+            if len(field_nodes) != 1:
+                field_names = [field_node.name.value for field_node in field_nodes]
+                if not field_nodes:
+                    message = (
+                        f"OneOf Input Object '{type_.name}'"
+                        " must specify exactly one field."
                     )
+                elif len(field_nodes) > 1:
+                    quoted_field_names = ", ".join(
+                        f"'{field_name}'" for field_name in field_names
+                    )
+                    message = (
+                        f"OneOf Input Object '{type_.name}' must specify exactly one"
+                        f" field, got multiple fields: {quoted_field_names}."
+                    )
+                error_nodes = (
+                    [field_node.name for field_node in field_nodes]
+                    if field_nodes
+                    else [node]
                 )
+                self.report_error(GraphQLError(message, error_nodes))
+        else:
+            # Ensure every required field exists.
+            for field_name, field_def in type_.fields.items():
+                field_node = field_node_map.get(field_name)
+                if not field_node and is_required_input_field(field_def):
+                    field_type = field_def.type
+                    self.report_error(
+                        GraphQLError(
+                            f"Field '{type_.name}.{field_name}' of required type"
+                            f" '{field_type}' was not provided.",
+                            node,
+                        )
+                    )
         return None
 
     def enter_object_field(self, node: ObjectFieldNode, *_args: Any) -> None:
@@ -89,7 +117,16 @@ class ValuesOfCorrectTypeRule(ValidationRule):
 
     def enter_null_value(self, node: NullValueNode, *_args: Any) -> None:
         type_ = self.context.get_input_type()
-        if is_non_null_type(type_):
+        parent_type = get_named_type(self.context.get_parent_input_type())
+        if is_input_object_type(parent_type) and parent_type.is_one_of:
+            self.report_error(
+                GraphQLError(
+                    f"OneOf Input Object '{parent_type.name}'"
+                    " must specify exactly one non-null field.",
+                    node,
+                )
+            )
+        elif is_non_null_type(type_):
             self.report_error(
                 GraphQLError(
                     f"Expected value of type '{type_}', found {print_ast(node)}.", node

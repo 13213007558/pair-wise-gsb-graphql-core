@@ -22,6 +22,7 @@ __all__ = [
     "GraphQLSkipDirective",
     "GraphQLDeprecatedDirective",
     "GraphQLSpecifiedByDirective",
+    "GraphQLOneOfDirective",
     "DirectiveLocation",
     "DEFAULT_DEPRECATION_REASON",
 ]
@@ -238,11 +239,21 @@ GraphQLSpecifiedByDirective = GraphQLDirective(
 )
 
 
+# Used to indicate an input object type is a OneOf input object type:
+GraphQLOneOfDirective = GraphQLDirective(
+    name="oneOf",
+    locations=[DirectiveLocation.INPUT_OBJECT],
+    description="Indicates that exactly one of the fields defined by the input"
+    " object type must be supplied.",
+)
+
+
 specified_directives: Tuple[GraphQLDirective, ...] = (
     GraphQLIncludeDirective,
     GraphQLSkipDirective,
     GraphQLDeprecatedDirective,
     GraphQLSpecifiedByDirective,
+    GraphQLOneOfDirective,
 )
 """A tuple with all directives from the GraphQL specification"""
 

@@ -226,7 +226,7 @@ def describe_schema_builder():
     def maintains_include_skip_and_specified_by_url_directives():
         schema = build_schema("type Query")
 
-        assert len(schema.directives) == 4
+        assert len(schema.directives) == 5
         assert schema.get_directive("skip") is GraphQLSkipDirective
         assert schema.get_directive("include") is GraphQLIncludeDirective
         assert schema.get_directive("deprecated") is GraphQLDeprecatedDirective
@@ -242,7 +242,7 @@ def describe_schema_builder():
             """
         )
 
-        assert len(schema.directives) == 4
+        assert len(schema.directives) == 5
         get_directive = schema.get_directive
         assert get_directive("skip") is not GraphQLSkipDirective
         assert get_directive("skip") is not None
@@ -260,7 +260,7 @@ def describe_schema_builder():
             """
         )
 
-        assert len(schema.directives) == 5
+        assert len(schema.directives) == 6
         assert schema.get_directive("skip") is GraphQLSkipDirective
         assert schema.get_directive("include") is GraphQLIncludeDirective
         assert schema.get_directive("deprecated") is GraphQLDeprecatedDirective

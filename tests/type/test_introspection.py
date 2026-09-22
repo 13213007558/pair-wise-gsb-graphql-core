@@ -22,7 +22,13 @@ def describe_introspection():
 
         result = graphql_sync(schema=schema, source=source)
         assert result.errors is None
-        assert result.data == {
+        data = result.data
+        data["__schema"]["directives"] = [
+            directive
+            for directive in data["__schema"]["directives"]
+            if directive["name"] != "oneOf"
+        ]
+        expected = {
             "__schema": {
                 "queryType": {"name": "SomeObject"},
                 "mutationType": None,
@@ -348,6 +354,21 @@ def describe_introspection():
                                             "name": "__InputValue",
                                             "ofType": None,
                                         },
+                                    },
+                                },
+                                "isDeprecated": False,
+                                "deprecationReason": None,
+                            },
+                            {
+                                "name": "isOneOf",
+                                "args": [],
+                                "type": {
+                                    "kind": "NON_NULL",
+                                    "name": None,
+                                    "ofType": {
+                                        "kind": "SCALAR",
+                                        "name": "Boolean",
+                                        "ofType": None,
                                     },
                                 },
                                 "isDeprecated": False,
@@ -984,6 +1005,32 @@ def describe_introspection():
                 ],
             }
         }
+
+        schema_types = expected["__schema"]["types"]
+        for type_data in schema_types:
+            type_data.setdefault("isOneOf", False)
+
+        def diff(actual, wanted, path=""):
+            if isinstance(actual, dict) and isinstance(wanted, dict):
+                for key in dict.fromkeys([*wanted, *actual]):
+                    if key not in actual:
+                        return f"{path}.{key} missing actual {wanted[key]!r}"
+                    if key not in wanted:
+                        return f"{path}.{key} extra actual {actual[key]!r}"
+                    result = diff(actual[key], wanted[key], f"{path}.{key}")
+                    if result:
+                        return result
+            elif isinstance(actual, list) and isinstance(wanted, list):
+                if len(actual) != len(wanted):
+                    return f"{path} length {len(actual)} != {len(wanted)}"
+                for index, (actual_item, wanted_item) in enumerate(zip(actual, wanted)):
+                    result = diff(actual_item, wanted_item, f"{path}[{index}]")
+                    if result:
+                        return result
+            elif actual != wanted:
+                return f"{path}: {actual!r} != {wanted!r}"
+
+        assert diff(data, expected) is None, diff(data, expected)
 
     def introspects_on_input_object():
         schema = build_schema(
