@@ -10,6 +10,11 @@ from typing import (
 
 from ..error import GraphQLError, located_error
 from ..execution.collect_fields import collect_fields
+from ..execution.cost import (
+    CostBudgetExceededError,
+    analyze_operation_cost,
+    get_cost_budget,
+)
 from ..execution.execute import (
     assert_valid_execution_arguments,
     execute,
@@ -143,6 +148,20 @@ async def create_source_event_stream(
     # Return early errors if execution context failed.
     if isinstance(context, list):
         return ExecutionResult(data=None, errors=context)
+
+    cost_budget = get_cost_budget(schema)
+    if cost_budget is not None:
+        try:
+            analysis = analyze_operation_cost(
+                schema,
+                context.operation,
+                fragments=context.fragments,
+                _coerced_variable_values=context.variable_values,
+            )
+            if analysis.cost > cost_budget:
+                raise CostBudgetExceededError(cost_budget, analysis)
+        except GraphQLError as error:
+            return ExecutionResult(data=None, errors=[error])
 
     try:
         event_stream = await execute_subscription(context)

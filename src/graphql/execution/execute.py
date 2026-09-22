@@ -62,6 +62,12 @@ from ..type import (
     is_object_type,
 )
 from .collect_fields import collect_fields, collect_sub_fields
+from .cost import (
+    CostBudgetExceededError,
+    analyze_operation_cost,
+    get_cost_budget,
+    validate_cost_budget,
+)
 from .middleware import MiddlewareManager
 from .values import get_argument_values, get_variable_values
 
@@ -977,6 +983,7 @@ def execute(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
+    cost_budget: Any = Undefined,
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a GraphQL operation.
 
@@ -1013,6 +1020,26 @@ def execute(
     # Return early errors if execution context failed.
     if isinstance(exe_context, list):
         return ExecutionResult(data=None, errors=exe_context)
+
+    try:
+        if cost_budget is Undefined:
+            cost_budget = get_cost_budget(schema)
+        else:
+            cost_budget = validate_cost_budget(cost_budget)
+    except GraphQLError as error:
+        return ExecutionResult(data=None, errors=[error])
+    if cost_budget is not None and cost_budget is not Undefined:
+        try:
+            analysis = analyze_operation_cost(
+                schema,
+                exe_context.operation,
+                fragments=exe_context.fragments,
+                _coerced_variable_values=exe_context.variable_values,
+            )
+            if analysis.cost > cost_budget:
+                raise CostBudgetExceededError(cost_budget, analysis)
+        except GraphQLError as error:
+            return ExecutionResult(data=None, errors=[error])
 
     # Return a possible coroutine object that will eventually yield the data described
     # by the "Response" section of the GraphQL specification.
@@ -1065,6 +1092,7 @@ def execute_sync(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     check_sync: bool = False,
+    cost_budget: Any = Undefined,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -1094,6 +1122,7 @@ def execute_sync(
         middleware,
         execution_context_class,
         is_awaitable,
+        cost_budget,
     )
 
     # Assert that the execution was synchronous.

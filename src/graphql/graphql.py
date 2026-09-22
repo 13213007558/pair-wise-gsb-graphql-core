@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Optional, Type, Union
 from .error import GraphQLError
 from .execution import ExecutionContext, ExecutionResult, Middleware, execute
 from .language import Source, parse
-from .pyutils import AwaitableOrValue
+from .pyutils import AwaitableOrValue, Undefined
 from .type import (
     GraphQLFieldResolver,
     GraphQLSchema,
@@ -28,6 +28,7 @@ async def graphql(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type[ExecutionContext]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
+    cost_budget: Any = Undefined,
 ) -> ExecutionResult:
     """Execute a GraphQL operation asynchronously.
 
@@ -87,6 +88,7 @@ async def graphql(
         middleware,
         execution_context_class,
         is_awaitable,
+        cost_budget,
     )
 
     if isawaitable(result):
@@ -112,6 +114,7 @@ def graphql_sync(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type[ExecutionContext]] = None,
     check_sync: bool = False,
+    cost_budget: Any = Undefined,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -139,6 +142,7 @@ def graphql_sync(
         middleware,
         execution_context_class,
         is_awaitable,
+        cost_budget,
     )
 
     # Assert that the execution was synchronous.
@@ -161,6 +165,7 @@ def graphql_impl(
     middleware: Optional[Middleware],
     execution_context_class: Optional[Type[ExecutionContext]],
     is_awaitable: Optional[Callable[[Any], bool]],
+    cost_budget: Any,
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a query, return asynchronously only if necessary."""
     # Validate Schema
@@ -195,4 +200,5 @@ def graphql_impl(
         middleware,
         execution_context_class,
         is_awaitable,
+        cost_budget,
     )
