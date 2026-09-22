@@ -428,6 +428,9 @@ from .execution import (
     get_argument_values,
     get_directive_values,
     get_variable_values,
+    # Deferred batch loading
+    DeferredValue,
+    SyncDataLoader,
     # Types
     ExecutionContext,
     ExecutionResult,
@@ -681,6 +684,8 @@ __all__ = [
     "InputObjectTypeExtensionNode",
     "execute",
     "execute_sync",
+    "DeferredValue",
+    "SyncDataLoader",
     "default_field_resolver",
     "default_type_resolver",
     "get_argument_values",

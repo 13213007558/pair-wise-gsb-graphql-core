@@ -97,3 +97,35 @@ fetching items from Python dictionaries.
 Finally, note that our data uses the internal values of the ``Episode`` enum that we
 have defined above, not the descriptive enum names that are used externally. For
 example, ``NEWHOPE`` ("A New Hope") has internally the actual episode number 4 as value.
+
+Batch Loading with Deferred Values
+----------------------------------
+
+.. currentmodule:: graphql
+
+When a resolver fetches related objects one by one (for example the owner of each of
+100 items in a list), this leads to one database query per object. To avoid this, a
+resolver can return a :class:`DeferredValue` created via :meth:`SyncDataLoader.load`
+instead of the actual value. The executor then collects the deferred values of the
+currently executable layer, calls the batch loading function of each loader once with
+all gathered keys, and continues completing the fields with the loaded values. Fields
+in the next layer that also return deferred values form the next batch, and so on.
+
+The batch loading function receives the sequence of keys and must return a sequence of
+values (or exceptions) of the same length. An exception returned for an individual key
+is raised as a field error only at the positions of that key, bubbling according to
+the nullability of the field type, without affecting the other values of the batch.
+Within one execution, each key is loaded only once per loader and the result is reused
+for all positions referring to the same key; the cache is not shared between
+executions. Deferred values require synchronous execution, e.g. using
+:func:`graphql_sync` or :func:`execute_sync`::
+
+    from graphql import SyncDataLoader, graphql_sync
+
+    def load_users(keys):
+        return [user_database.get(key) for key in keys]
+
+    user_loader = SyncDataLoader(load_users)
+
+    def resolve_owner(item, info):
+        return user_loader.load(item.owner_id)

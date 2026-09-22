@@ -14,6 +14,7 @@ from .execute import (
     FormattedExecutionResult,
     Middleware,
 )
+from .deferred import DeferredValue, SyncDataLoader
 from .map_async_iterator import MapAsyncIterator
 from .subscribe import subscribe, create_source_event_stream
 from .middleware import MiddlewareManager
@@ -21,6 +22,7 @@ from .values import get_argument_values, get_directive_values, get_variable_valu
 
 __all__ = [
     "create_source_event_stream",
+    "DeferredValue",
     "execute",
     "execute_sync",
     "default_field_resolver",
@@ -32,6 +34,7 @@ __all__ = [
     "MapAsyncIterator",
     "Middleware",
     "MiddlewareManager",
+    "SyncDataLoader",
     "get_argument_values",
     "get_directive_values",
     "get_variable_values",

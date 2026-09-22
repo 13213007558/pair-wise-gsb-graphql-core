@@ -1,4 +1,4 @@
-from asyncio import ensure_future, gather
+from asyncio import gather
 from collections.abc import Mapping
 from inspect import isawaitable
 from typing import (
@@ -7,6 +7,7 @@ from typing import (
     Awaitable,
     Callable,
     Dict,
+    Hashable,
     Iterable,
     List,
     Optional,
@@ -62,6 +63,7 @@ from ..type import (
     is_object_type,
 )
 from .collect_fields import collect_fields, collect_sub_fields
+from .deferred import DeferredValue, SyncDataLoader
 from .middleware import MiddlewareManager
 from .values import get_argument_values, get_variable_values
 
@@ -173,6 +175,77 @@ class ExecutionResult:
 Middleware = Optional[Union[Tuple, List, MiddlewareManager]]
 
 
+class _DeferredCompletion:
+    """Placeholder for a field result that depends on a deferred batch value.
+
+    For internal use only.
+    """
+
+    __slots__ = (
+        "context",
+        "return_type",
+        "field_nodes",
+        "info",
+        "path",
+        "deferred",
+        "parent",
+        "value",
+    )
+
+    def __init__(
+        self,
+        context: "ExecutionContext",
+        return_type: GraphQLOutputType,
+        field_nodes: List[FieldNode],
+        info: GraphQLResolveInfo,
+        path: Path,
+        deferred: Optional[DeferredValue] = None,
+        value: Any = None,
+        parent: Optional["_DeferredCompletion"] = None,
+    ) -> None:
+        self.context = context
+        self.return_type = return_type
+        self.field_nodes = field_nodes
+        self.info = info
+        self.path = path
+        self.deferred = deferred
+        self.value = value
+        self.parent = parent
+
+    def force(self) -> None:
+        """Complete the deferred value now that its batch is dispatched."""
+        context = self.context
+        try:
+            value = context.get_deferred_value(cast(DeferredValue, self.deferred))
+            current_forcing = context._current_forcing
+            context._current_forcing = self
+            try:
+                completed = context.complete_value(
+                    self.return_type, self.field_nodes, self.info, self.path, value
+                )
+            finally:
+                context._current_forcing = current_forcing
+        except Exception as raw_error:
+            self.fail(raw_error)
+        else:
+            self.value = completed
+
+    def fail(self, raw_error: Exception) -> None:
+        """Fail this completion, bubbling the error based on nullability."""
+        error = located_error(raw_error, self.field_nodes, self.path.as_list())
+        try:
+            self.context.handle_field_error(error, self.return_type)
+        except Exception as bubbling_error:
+            # The field type is non-nullable, the error propagates further.
+            self.value = None
+            parent = self.parent
+            if parent is None:
+                raise bubbling_error
+            parent.fail(bubbling_error)
+        else:
+            self.value = None
+
+
 class ExecutionContext:
     """Data that must be available at all points during query execution.
 
@@ -223,6 +296,11 @@ class ExecutionContext:
         if is_awaitable:
             self.is_awaitable = is_awaitable  # type: ignore
         self._subfields_cache: Dict[Tuple, Dict[str, List[FieldNode]]] = {}
+        self._deferred_cache: Dict[SyncDataLoader, Dict[Hashable, Any]] = {}
+        self._pending_deferred: List[DeferredValue] = []
+        self._pending_completions: List[_DeferredCompletion] = []
+        self._current_forcing: Optional[_DeferredCompletion] = None
+        self._deferred_used = False
 
     @classmethod
     def build(
@@ -352,11 +430,29 @@ class ExecutionContext:
 
         path = None
 
-        return (
+        result = (
             self.execute_fields_serially
             if operation.operation == OperationType.MUTATION
             else self.execute_fields
         )(root_type, root_value, path, root_fields)
+
+        if self.is_awaitable(result):
+            if self._deferred_used:
+                # Deferred values cannot be resolved asynchronously.
+                close = getattr(result, "close", None)
+                if callable(close):
+                    close()
+                raise GraphQLError(
+                    "Cannot resolve deferred values during asynchronous"
+                    " execution. Use synchronous execution when resolvers"
+                    " return deferred values."
+                )
+            return result
+
+        self.drain_deferred()
+        if self._deferred_used:
+            result = self.materialize_deferred(result)
+        return result
 
     def execute_fields_serially(
         self,
@@ -379,6 +475,10 @@ class ExecutionContext:
             )
             if result is Undefined:
                 continue
+            if self._pending_completions:
+                # Ensure that all deferred values spawned by this root field
+                # are loaded and completed before the next root field runs.
+                self.drain_deferred()
             if is_awaitable(results):
                 # noinspection PyShadowingNames
                 async def await_and_set_result(
@@ -574,6 +674,138 @@ class ExecutionContext:
         self.errors.append(error)
         return None
 
+    def defer_completion(
+        self,
+        return_type: GraphQLOutputType,
+        field_nodes: List[FieldNode],
+        info: GraphQLResolveInfo,
+        path: Path,
+        deferred: DeferredValue,
+    ) -> _DeferredCompletion:
+        """Defer the completion of a deferred value.
+
+        Registers the deferred value for the next batch dispatch and returns
+        a placeholder that is completed once the batch has been dispatched.
+        """
+        self._deferred_used = True
+        loader_cache = self._deferred_cache.setdefault(deferred.loader, {})
+        if deferred.key not in loader_cache:
+            self._pending_deferred.append(deferred)
+        completion = _DeferredCompletion(
+            self,
+            return_type,
+            field_nodes,
+            info,
+            path,
+            deferred,
+            parent=self._current_forcing,
+        )
+        self._pending_completions.append(completion)
+        return completion
+
+    def maybe_wrap_deferred(
+        self,
+        return_type: GraphQLOutputType,
+        field_nodes: List[FieldNode],
+        info: GraphQLResolveInfo,
+        path: Path,
+        completed: Any,
+    ) -> Any:
+        """Wrap a completed container that contains deferred placeholders.
+
+        The wrapper ensures that errors of deferred completions bubble
+        through the container according to the nullability of the field type.
+        """
+        if isinstance(completed, dict):
+            children = completed.values()
+        elif isinstance(completed, list):
+            children = completed
+        else:
+            return completed
+        deferred_children = [
+            child for child in children if isinstance(child, _DeferredCompletion)
+        ]
+        if not deferred_children:
+            return completed
+        self._deferred_used = True
+        container = _DeferredCompletion(
+            self,
+            return_type,
+            field_nodes,
+            info,
+            path,
+            value=completed,
+            parent=self._current_forcing,
+        )
+        for child in deferred_children:
+            child.parent = container
+        return container
+
+    def dispatch_deferred_batch(self) -> None:
+        """Dispatch all pending deferred values in one batch per loader."""
+        pending = self._pending_deferred
+        if not pending:
+            return
+        self._pending_deferred = []
+        cache = self._deferred_cache
+        keys_by_loader: Dict[SyncDataLoader, List[Any]] = {}
+        for deferred in pending:
+            loader_cache = cache.setdefault(deferred.loader, {})
+            if deferred.key in loader_cache:
+                continue  # already loaded or already queued
+            loader_cache[deferred.key] = None  # marker, replaced below
+            keys_by_loader.setdefault(deferred.loader, []).append(deferred.key)
+        for loader, keys in keys_by_loader.items():
+            loader_cache = cache[loader]
+            try:
+                values = loader.batch_load_fn(keys)
+            except Exception as error:
+                # If the batch loading function fails as a whole, each key
+                # resolves to the same error.
+                for key in keys:
+                    loader_cache[key] = error
+            else:
+                values = list(values)
+                if len(values) != len(keys):
+                    raise GraphQLError(
+                        "Batch loading function did not return the expected"
+                        f" number of values, expected {len(keys)},"
+                        f" but got {len(values)}."
+                    )
+                loader_cache.update(zip(keys, values))
+
+    def get_deferred_value(self, deferred: DeferredValue) -> Any:
+        """Get the loaded value for a dispatched deferred value."""
+        value = self._deferred_cache[deferred.loader][deferred.key]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    def drain_deferred(self) -> None:
+        """Dispatch and complete all pending deferred values in rounds.
+
+        Each round dispatches one batch per loader and then completes the
+        fields that were waiting for the loaded values. Completing these
+        fields can register new deferred values (e.g. from sub-fields),
+        which are then dispatched in the next round.
+        """
+        while self._pending_completions:
+            completions = self._pending_completions
+            self._pending_completions = []
+            self.dispatch_deferred_batch()
+            for completion in completions:
+                completion.force()
+
+    def materialize_deferred(self, value: Any) -> Any:
+        """Replace all deferred placeholders in a completed result."""
+        if isinstance(value, _DeferredCompletion):
+            return self.materialize_deferred(value.value)
+        if isinstance(value, dict):
+            return {key: self.materialize_deferred(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self.materialize_deferred(item) for item in value]
+        return value
+
     def complete_value(
         self,
         return_type: GraphQLOutputType,
@@ -604,6 +836,12 @@ class ExecutionContext:
         Otherwise, the field type expects a sub-selection set, and will complete the
         value by evaluating all sub-selections.
         """
+        # If the result is a deferred value, register it with the execution
+        # context and return a placeholder that will be completed once the
+        # current batch of deferred values has been dispatched.
+        if isinstance(result, DeferredValue):
+            return self.defer_completion(return_type, field_nodes, info, path, result)
+
         # If result is an Exception, throw a located error.
         if isinstance(result, Exception):
             raise result
@@ -618,6 +856,11 @@ class ExecutionContext:
                 path,
                 result,
             )
+            if isinstance(completed, _DeferredCompletion):
+                # Ensure that errors of the deferred completion bubble
+                # according to the non-null field type.
+                completed.return_type = return_type
+                return completed
             if completed is None:
                 raise TypeError(
                     "Cannot return null for non-nullable field"
@@ -751,7 +994,9 @@ class ExecutionContext:
             append_result(completed_item)
 
         if not awaitable_indices:
-            return completed_results
+            return self.maybe_wrap_deferred(
+                return_type, field_nodes, info, path, completed_results
+            )
 
         # noinspection PyShadowingNames
         async def get_completed_results() -> List[Any]:
@@ -926,7 +1171,8 @@ class ExecutionContext:
             if not is_type_of:
                 raise invalid_return_type_error(return_type, result, field_nodes)
 
-        return self.execute_fields(return_type, result, path, sub_field_nodes)
+        completed = self.execute_fields(return_type, result, path, sub_field_nodes)
+        return self.maybe_wrap_deferred(return_type, field_nodes, info, path, completed)
 
     def collect_subfields(
         self, return_type: GraphQLObjectType, field_nodes: List[FieldNode]
@@ -1098,7 +1344,10 @@ def execute_sync(
 
     # Assert that the execution was synchronous.
     if isawaitable(result):
-        ensure_future(result).cancel()
+        # Close the coroutine if possible, but never start an event loop.
+        close = getattr(result, "close", None)
+        if callable(close):
+            close()
         raise RuntimeError("GraphQL execution failed to complete synchronously.")
 
     return result
