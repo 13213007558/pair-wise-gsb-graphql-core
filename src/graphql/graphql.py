@@ -3,7 +3,13 @@ from inspect import isawaitable
 from typing import Any, Callable, Dict, Optional, Type, Union
 
 from .error import GraphQLError
-from .execution import ExecutionContext, ExecutionResult, Middleware, execute
+from .execution import (
+    ErrorSanitizer,
+    ExecutionContext,
+    ExecutionResult,
+    Middleware,
+    execute,
+)
 from .language import Source, parse
 from .pyutils import AwaitableOrValue
 from .type import (
@@ -28,6 +34,7 @@ async def graphql(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type[ExecutionContext]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
+    error_sanitizer: Optional[ErrorSanitizer] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation asynchronously.
 
@@ -73,6 +80,9 @@ async def graphql(
       The execution context class to use to build the context
     :arg is_awaitable:
       The predicate to be used for checking whether values are awaitable
+    :arg error_sanitizer:
+      An optional ErrorSanitizer policy that hides the values of sensitive
+      arguments and input fields in the errors of the public response
     """
     # Always return asynchronously for a consistent API.
     result = graphql_impl(
@@ -87,6 +97,7 @@ async def graphql(
         middleware,
         execution_context_class,
         is_awaitable,
+        error_sanitizer,
     )
 
     if isawaitable(result):
@@ -112,6 +123,7 @@ def graphql_sync(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type[ExecutionContext]] = None,
     check_sync: bool = False,
+    error_sanitizer: Optional[ErrorSanitizer] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -139,6 +151,7 @@ def graphql_sync(
         middleware,
         execution_context_class,
         is_awaitable,
+        error_sanitizer,
     )
 
     # Assert that the execution was synchronous.
@@ -161,6 +174,7 @@ def graphql_impl(
     middleware: Optional[Middleware],
     execution_context_class: Optional[Type[ExecutionContext]],
     is_awaitable: Optional[Callable[[Any], bool]],
+    error_sanitizer: Optional[ErrorSanitizer] = None,
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a query, return asynchronously only if necessary."""
     # Validate Schema
@@ -179,6 +193,10 @@ def graphql_impl(
 
     validation_errors = validate(schema, document)
     if validation_errors:
+        if error_sanitizer is not None:
+            validation_errors = error_sanitizer.sanitize_errors(
+                validation_errors, schema, document, variable_values
+            )
         return ExecutionResult(data=None, errors=validation_errors)
 
     # Execute
@@ -195,4 +213,5 @@ def graphql_impl(
         middleware,
         execution_context_class,
         is_awaitable,
+        error_sanitizer,
     )

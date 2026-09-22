@@ -17,12 +17,14 @@ from .execute import (
 from .map_async_iterator import MapAsyncIterator
 from .subscribe import subscribe, create_source_event_stream
 from .middleware import MiddlewareManager
+from .sanitize import ErrorSanitizer
 from .values import get_argument_values, get_directive_values, get_variable_values
 
 __all__ = [
     "create_source_event_stream",
     "execute",
     "execute_sync",
+    "ErrorSanitizer",
     "default_field_resolver",
     "default_type_resolver",
     "subscribe",

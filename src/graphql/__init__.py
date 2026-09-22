@@ -439,6 +439,8 @@ from .execution import (
     # Middleware
     Middleware,
     MiddlewareManager,
+    # Error sanitization
+    ErrorSanitizer,
 )
 
 # The primary entry point into fulfilling a GraphQL request.
@@ -691,6 +693,7 @@ __all__ = [
     "FormattedExecutionResult",
     "Middleware",
     "MiddlewareManager",
+    "ErrorSanitizer",
     "subscribe",
     "create_source_event_stream",
     "MapAsyncIterator",

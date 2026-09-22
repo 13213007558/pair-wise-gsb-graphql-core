@@ -63,6 +63,7 @@ from ..type import (
 )
 from .collect_fields import collect_fields, collect_sub_fields
 from .middleware import MiddlewareManager
+from .sanitize import ErrorSanitizer
 from .values import get_argument_values, get_variable_values
 
 __all__ = [
@@ -977,6 +978,7 @@ def execute(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
+    error_sanitizer: Optional[ErrorSanitizer] = None,
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a GraphQL operation.
 
@@ -993,6 +995,15 @@ def execute(
 
     if execution_context_class is None:
         execution_context_class = ExecutionContext
+
+    # If an error sanitizer is given, build a request-local sanitizer that
+    # hides the values of sensitive arguments and input fields in the errors
+    # of the public response.
+    request_sanitizer = (
+        error_sanitizer.for_request(schema, document, variable_values)
+        if error_sanitizer is not None
+        else None
+    )
 
     # If a valid execution context cannot be created due to incorrect arguments,
     # a "Response" with only errors is returned.
@@ -1012,6 +1023,8 @@ def execute(
 
     # Return early errors if execution context failed.
     if isinstance(exe_context, list):
+        if request_sanitizer is not None:
+            exe_context = request_sanitizer.sanitize(exe_context)
         return ExecutionResult(data=None, errors=exe_context)
 
     # Return a possible coroutine object that will eventually yield the data described
@@ -1026,7 +1039,18 @@ def execute(
     # at which point we still log the error and null the parent field, which
     # in this case is the entire response.
     errors = exe_context.errors
-    build_response = exe_context.build_response
+    if request_sanitizer is not None:
+        original_build_response = exe_context.build_response
+        sanitize_errors = request_sanitizer.sanitize
+
+        def build_sanitized_response(
+            data: Optional[Dict[str, Any]], errors: List[GraphQLError]
+        ) -> ExecutionResult:
+            return original_build_response(data, sanitize_errors(errors))
+
+        build_response = build_sanitized_response
+    else:
+        build_response = exe_context.build_response
     try:
         operation = exe_context.operation
         result = exe_context.execute_operation(operation, root_value)
@@ -1065,6 +1089,7 @@ def execute_sync(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     check_sync: bool = False,
+    error_sanitizer: Optional[ErrorSanitizer] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -1094,6 +1119,7 @@ def execute_sync(
         middleware,
         execution_context_class,
         is_awaitable,
+        error_sanitizer,
     )
 
     # Assert that the execution was synchronous.
