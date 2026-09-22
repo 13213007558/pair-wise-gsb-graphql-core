@@ -181,6 +181,9 @@ from .utilities import (
     extend_schema,
     # Sort a GraphQLSchema.
     lexicographic_sort_schema,
+    # Project a GraphQLSchema to an allowed set of schema coordinates.
+    project_schema,
+    SchemaProjectionError,
     # Print a GraphQLSchema to GraphQL Schema language.
     print_schema,
     # Print a GraphQLType to GraphQL Schema language.
@@ -751,6 +754,8 @@ __all__ = [
     "build_schema",
     "extend_schema",
     "lexicographic_sort_schema",
+    "project_schema",
+    "SchemaProjectionError",
     "print_schema",
     "print_type",
     "print_introspection_schema",

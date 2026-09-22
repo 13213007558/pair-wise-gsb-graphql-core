@@ -28,6 +28,9 @@ from .extend_schema import extend_schema
 # Sort a GraphQLSchema.
 from .lexicographic_sort_schema import lexicographic_sort_schema
 
+# Project a GraphQLSchema to an allowed set of schema coordinates.
+from .project_schema import SchemaProjectionError, project_schema
+
 # Print a GraphQLSchema to GraphQL Schema language.
 from .print_schema import (
     print_introspection_schema,
@@ -90,6 +93,7 @@ __all__ = [
     "DangerousChange",
     "DangerousChangeType",
     "IntrospectionQuery",
+    "SchemaProjectionError",
     "TypeInfo",
     "TypeInfoVisitor",
     "assert_valid_name",
@@ -116,6 +120,7 @@ __all__ = [
     "print_schema",
     "print_type",
     "print_value",
+    "project_schema",
     "separate_operations",
     "strip_ignored_characters",
     "type_from_ast",
