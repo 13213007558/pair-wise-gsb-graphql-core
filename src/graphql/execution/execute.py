@@ -63,6 +63,7 @@ from ..type import (
 )
 from .collect_fields import collect_fields, collect_sub_fields
 from .middleware import MiddlewareManager
+from .sensitive import SensitiveErrorRedaction, SensitiveErrorRedactor
 from .values import get_argument_values, get_variable_values
 
 __all__ = [
@@ -238,6 +239,7 @@ class ExecutionContext:
         subscribe_field_resolver: Optional[GraphQLFieldResolver] = None,
         middleware: Optional[Middleware] = None,
         is_awaitable: Optional[Callable[[Any], bool]] = None,
+        error_redactor: Optional["SensitiveErrorRedactor"] = None,
     ) -> Union[List[GraphQLError], "ExecutionContext"]:
         """Build an execution context
 
@@ -289,6 +291,7 @@ class ExecutionContext:
             operation.variable_definitions or (),
             raw_variable_values or {},
             max_errors=50,
+            error_redactor=error_redactor,
         )
 
         if isinstance(coerced_variable_values, list):
@@ -977,6 +980,7 @@ def execute(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
+    error_redaction: Optional[SensitiveErrorRedaction] = None,
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a GraphQL operation.
 
@@ -987,6 +991,10 @@ def execute(
 
     If the arguments to this function do not result in a legal execution context,
     a GraphQLError will be thrown immediately explaining the invalid input.
+
+    If an error redaction configuration is provided, the values of all
+    arguments and input fields that are marked as sensitive are redacted from
+    the errors in the returned result.
     """
     # If arguments are missing or incorrect, throw an error.
     assert_valid_execution_arguments(schema, document, variable_values)
@@ -994,8 +1002,19 @@ def execute(
     if execution_context_class is None:
         execution_context_class = ExecutionContext
 
+    # If sensitive values should be redacted from the returned errors, create
+    # a per-request redactor and collect the sensitive literals and variable
+    # usages from the document.
+    redactor: Optional[SensitiveErrorRedactor] = None
+    if error_redaction is not None:
+        redactor = SensitiveErrorRedactor(error_redaction)
+        redactor.collect_document(schema, document)
+
     # If a valid execution context cannot be created due to incorrect arguments,
     # a "Response" with only errors is returned.
+    build_kwargs: Dict[str, Any] = (
+        {"error_redactor": redactor} if redactor is not None else {}
+    )
     exe_context = execution_context_class.build(
         schema,
         document,
@@ -1008,10 +1027,13 @@ def execute(
         subscribe_field_resolver,
         middleware,
         is_awaitable,
+        **build_kwargs,
     )
 
     # Return early errors if execution context failed.
     if isinstance(exe_context, list):
+        if redactor is not None:
+            exe_context = redactor.redact_errors(exe_context)
         return ExecutionResult(data=None, errors=exe_context)
 
     # Return a possible coroutine object that will eventually yield the data described
@@ -1027,6 +1049,17 @@ def execute(
     # in this case is the entire response.
     errors = exe_context.errors
     build_response = exe_context.build_response
+
+    def respond(
+        data: Optional[Dict[str, Any]], error_list: List[GraphQLError]
+    ) -> ExecutionResult:
+        result = build_response(data, error_list)
+        if redactor is not None and result.errors:
+            return ExecutionResult(
+                result.data, redactor.redact_errors(result.errors), result.extensions
+            )
+        return result
+
     try:
         operation = exe_context.operation
         result = exe_context.execute_operation(operation, root_value)
@@ -1035,17 +1068,17 @@ def execute(
             # noinspection PyShadowingNames
             async def await_result() -> Any:
                 try:
-                    return build_response(await result, errors)  # type: ignore
+                    return respond(await result, errors)  # type: ignore
                 except GraphQLError as error:
                     errors.append(error)
-                    return build_response(None, errors)
+                    return respond(None, errors)
 
             return await_result()
     except GraphQLError as error:
         errors.append(error)
-        return build_response(None, errors)
+        return respond(None, errors)
     else:
-        return build_response(result, errors)  # type: ignore
+        return respond(result, errors)  # type: ignore
 
 
 def assume_not_awaitable(_value: Any) -> bool:
@@ -1065,6 +1098,7 @@ def execute_sync(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     check_sync: bool = False,
+    error_redaction: Optional[SensitiveErrorRedaction] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -1094,6 +1128,7 @@ def execute_sync(
         middleware,
         execution_context_class,
         is_awaitable,
+        error_redaction=error_redaction,
     )
 
     # Assert that the execution was synchronous.

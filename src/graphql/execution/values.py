@@ -1,4 +1,14 @@
-from typing import Any, Callable, Collection, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Dict,
+    List,
+    Optional,
+    Union,
+    TYPE_CHECKING,
+    cast,
+)
 
 from ..error import GraphQLError
 from ..language import (
@@ -31,6 +41,9 @@ from ..utilities.coerce_input_value import coerce_input_value
 from ..utilities.type_from_ast import type_from_ast
 from ..utilities.value_from_ast import value_from_ast
 
+if TYPE_CHECKING:
+    from .sensitive import SensitiveErrorRedactor
+
 __all__ = ["get_argument_values", "get_directive_values", "get_variable_values"]
 
 
@@ -42,12 +55,17 @@ def get_variable_values(
     var_def_nodes: Collection[VariableDefinitionNode],
     inputs: Dict[str, Any],
     max_errors: Optional[int] = None,
+    error_redactor: Optional["SensitiveErrorRedactor"] = None,
 ) -> CoercedVariableValues:
     """Get coerced variable values based on provided definitions.
 
     Prepares a dict of variable values of the correct type based on the provided
     variable definitions and arbitrary input. If the input cannot be parsed to match
     the variable definitions, a GraphQLError will be raised.
+
+    If an error redactor is provided, the sensitive values within the inputs
+    are registered with the redactor before coercion, so that they can be
+    redacted from any coercion errors afterwards.
     """
     errors: List[GraphQLError] = []
 
@@ -60,7 +78,9 @@ def get_variable_values(
         errors.append(error)
 
     try:
-        coerced = coerce_variable_values(schema, var_def_nodes, inputs, on_error)
+        coerced = coerce_variable_values(
+            schema, var_def_nodes, inputs, on_error, error_redactor
+        )
         if not errors:
             return coerced
     except GraphQLError as e:
@@ -74,6 +94,7 @@ def coerce_variable_values(
     var_def_nodes: Collection[VariableDefinitionNode],
     inputs: Dict[str, Any],
     on_error: Callable[[GraphQLError], None],
+    error_redactor: Optional["SensitiveErrorRedactor"] = None,
 ) -> Dict[str, Any]:
     coerced_values: Dict[str, Any] = {}
     for var_def_node in var_def_nodes:
@@ -120,6 +141,11 @@ def coerce_variable_values(
                 )
             )
             continue
+
+        if error_redactor is not None:
+            error_redactor.collect_value(
+                value, var_type, var_name in error_redactor.sensitive_variables
+            )
 
         def on_input_value_error(
             path: List[Union[str, int]], invalid_value: Any, error: GraphQLError

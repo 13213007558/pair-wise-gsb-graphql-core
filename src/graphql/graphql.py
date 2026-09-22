@@ -3,7 +3,14 @@ from inspect import isawaitable
 from typing import Any, Callable, Dict, Optional, Type, Union
 
 from .error import GraphQLError
-from .execution import ExecutionContext, ExecutionResult, Middleware, execute
+from .execution import (
+    ExecutionContext,
+    ExecutionResult,
+    Middleware,
+    SensitiveErrorRedaction,
+    SensitiveErrorRedactor,
+    execute,
+)
 from .language import Source, parse
 from .pyutils import AwaitableOrValue
 from .type import (
@@ -28,6 +35,7 @@ async def graphql(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type[ExecutionContext]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
+    error_redaction: Optional[SensitiveErrorRedaction] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation asynchronously.
 
@@ -73,6 +81,9 @@ async def graphql(
       The execution context class to use to build the context
     :arg is_awaitable:
       The predicate to be used for checking whether values are awaitable
+    :arg error_redaction:
+      An optional configuration for redacting the values of sensitive
+      arguments and input fields from the errors in the returned result
     """
     # Always return asynchronously for a consistent API.
     result = graphql_impl(
@@ -87,6 +98,7 @@ async def graphql(
         middleware,
         execution_context_class,
         is_awaitable,
+        error_redaction,
     )
 
     if isawaitable(result):
@@ -112,6 +124,7 @@ def graphql_sync(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type[ExecutionContext]] = None,
     check_sync: bool = False,
+    error_redaction: Optional[SensitiveErrorRedaction] = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -139,6 +152,7 @@ def graphql_sync(
         middleware,
         execution_context_class,
         is_awaitable,
+        error_redaction,
     )
 
     # Assert that the execution was synchronous.
@@ -161,6 +175,7 @@ def graphql_impl(
     middleware: Optional[Middleware],
     execution_context_class: Optional[Type[ExecutionContext]],
     is_awaitable: Optional[Callable[[Any], bool]],
+    error_redaction: Optional[SensitiveErrorRedaction] = None,
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a query, return asynchronously only if necessary."""
     # Validate Schema
@@ -179,6 +194,10 @@ def graphql_impl(
 
     validation_errors = validate(schema, document)
     if validation_errors:
+        if error_redaction is not None:
+            redactor = SensitiveErrorRedactor(error_redaction)
+            redactor.collect_document(schema, document)
+            validation_errors = redactor.redact_errors(validation_errors)
         return ExecutionResult(data=None, errors=validation_errors)
 
     # Execute
@@ -195,4 +214,5 @@ def graphql_impl(
         middleware,
         execution_context_class,
         is_awaitable,
+        error_redaction=error_redaction,
     )

@@ -15,6 +15,13 @@ from .execute import (
     Middleware,
 )
 from .map_async_iterator import MapAsyncIterator
+from .sensitive import (
+    DEFAULT_REDACTION_MARKER,
+    SENSITIVE_EXTENSION,
+    SensitiveErrorRedaction,
+    SensitiveErrorRedactor,
+    is_sensitive_definition,
+)
 from .subscribe import subscribe, create_source_event_stream
 from .middleware import MiddlewareManager
 from .values import get_argument_values, get_directive_values, get_variable_values
@@ -32,6 +39,11 @@ __all__ = [
     "MapAsyncIterator",
     "Middleware",
     "MiddlewareManager",
+    "DEFAULT_REDACTION_MARKER",
+    "SENSITIVE_EXTENSION",
+    "SensitiveErrorRedaction",
+    "SensitiveErrorRedactor",
+    "is_sensitive_definition",
     "get_argument_values",
     "get_directive_values",
     "get_variable_values",
