@@ -1,5 +1,5 @@
 from asyncio import ensure_future, gather
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from inspect import isawaitable
 from typing import (
     Any,
@@ -62,6 +62,16 @@ from ..type import (
     is_object_type,
 )
 from .collect_fields import collect_fields, collect_sub_fields
+from .deferred import (
+    DeferredBoundaryNode,
+    DeferredDictNode,
+    DeferredListNode,
+    DeferredLoadNode,
+    DeferredNode,
+    DeferredStructuralNode,
+    DeferredValue,
+    unwrap_deferred,
+)
 from .middleware import MiddlewareManager
 from .values import get_argument_values, get_variable_values
 
@@ -191,6 +201,7 @@ class ExecutionContext:
     subscribe_field_resolver: GraphQLFieldResolver
     errors: List[GraphQLError]
     middleware_manager: Optional[MiddlewareManager]
+    deferred_queue: List[DeferredLoadNode]
 
     is_awaitable = staticmethod(default_is_awaitable)
 
@@ -223,6 +234,8 @@ class ExecutionContext:
         if is_awaitable:
             self.is_awaitable = is_awaitable  # type: ignore
         self._subfields_cache: Dict[Tuple, Dict[str, List[FieldNode]]] = {}
+        self.deferred_queue = []
+        self.deferred_root_nulled = False
 
     @classmethod
     def build(
@@ -379,6 +392,15 @@ class ExecutionContext:
             )
             if result is Undefined:
                 continue
+            if isinstance(result, DeferredNode) and not is_awaitable(results):
+                # Deferred values must be fully loaded, including all derived
+                # loads, before the next field is executed, so that root
+                # mutation fields are executed serially.
+                result = self.complete_deferred(result)
+                cast(Dict[str, Any], results)[response_name] = result
+                if self.deferred_root_nulled:
+                    break
+                continue
             if is_awaitable(results):
                 # noinspection PyShadowingNames
                 async def await_and_set_result(
@@ -428,6 +450,7 @@ class ExecutionContext:
         is_awaitable = self.is_awaitable
         awaitable_fields: List[str] = []
         append_awaitable = awaitable_fields.append
+        contains_deferred = False
         for response_name, field_nodes in fields.items():
             field_path = Path(path, response_name, parent_type.name)
             result = self.execute_field(
@@ -437,9 +460,13 @@ class ExecutionContext:
                 results[response_name] = result
                 if is_awaitable(result):
                     append_awaitable(response_name)
+                elif isinstance(result, DeferredNode):
+                    contains_deferred = True
 
         #  If there are no coroutines, we can just return the object
         if not awaitable_fields:
+            if contains_deferred:
+                return DeferredDictNode(results)
             return results
 
         # Otherwise, results is a map from field name to the result of resolving that
@@ -453,6 +480,8 @@ class ExecutionContext:
                     await gather(*(results[field] for field in awaitable_fields)),
                 )
             )
+            if contains_deferred:
+                return DeferredDictNode(results)  # type: ignore
             return results
 
         return get_results()
@@ -529,6 +558,9 @@ class ExecutionContext:
                         completed = self.complete_value(
                             return_type, field_nodes, info, path, await result
                         )
+                        completed = self.add_deferred_boundary(
+                            completed, return_type, field_nodes, path
+                        )
                         if self.is_awaitable(completed):
                             return await completed
                         return completed
@@ -541,6 +573,9 @@ class ExecutionContext:
 
             completed = self.complete_value(
                 return_type, field_nodes, info, path, result
+            )
+            completed = self.add_deferred_boundary(
+                completed, return_type, field_nodes, path
             )
             if self.is_awaitable(completed):
                 # noinspection PyShadowingNames
@@ -574,6 +609,113 @@ class ExecutionContext:
         self.errors.append(error)
         return None
 
+    @property
+    def deferred_active(self) -> bool:
+        """Whether deferred values are pending or have nulled the root value."""
+        return bool(self.deferred_queue) or self.deferred_root_nulled
+
+    def defer_value(
+        self,
+        deferred: DeferredValue,
+        return_type: GraphQLOutputType,
+        field_nodes: List[FieldNode],
+        info: GraphQLResolveInfo,
+        path: Path,
+    ) -> DeferredLoadNode:
+        """Defer the completion of a value until its loader is dispatched.
+
+        For internal use only.
+        """
+        node = DeferredLoadNode(
+            deferred.loader, deferred.key, return_type, field_nodes, info, path
+        )
+        self.deferred_queue.append(node)
+        return node
+
+    def handle_deferred_root_error(self, error: GraphQLError) -> None:
+        """Handle a deferred error that has propagated to the root value."""
+        self.errors.append(error)
+        self.deferred_root_nulled = True
+
+    @staticmethod
+    def add_deferred_boundary(
+        completed: Any,
+        return_type: GraphQLOutputType,
+        field_nodes: List[FieldNode],
+        path: Path,
+    ) -> Any:
+        """Wrap a deferred structural node in an error boundary.
+
+        For internal use only.
+        """
+        if isinstance(completed, DeferredStructuralNode):
+            return DeferredBoundaryNode(return_type, field_nodes, path, completed)
+        return completed
+
+    def complete_deferred(self, result: Any) -> Any:
+        """Load all pending deferred values and unwrap the final result."""
+        self.drain_deferred()
+        if self.deferred_root_nulled:
+            return None
+        return unwrap_deferred(result)
+
+    def drain_deferred(self) -> None:
+        """Dispatch all pending deferred values, round by round.
+
+        Each round collects the deferred values that are currently pending,
+        dispatches them in one batch per loader, and then completes them,
+        which may produce the deferred values of the next round.
+        """
+        queue = self.deferred_queue
+        while queue:
+            nodes = queue[:]
+            del queue[:]
+            self.dispatch_deferred(nodes)
+            for node in nodes:
+                node.complete(self)
+
+    def dispatch_deferred(self, nodes: List[DeferredLoadNode]) -> None:
+        """Dispatch one round of deferred values, batched per loader.
+
+        Within one round, the same key of the same loader is only requested
+        once, and the outcome is mapped back to each node by its key.
+        """
+        nodes_by_loader: Dict[Any, List[DeferredLoadNode]] = {}
+        for node in nodes:
+            loader = node.loader
+            if loader in nodes_by_loader:
+                nodes_by_loader[loader].append(node)
+            else:
+                nodes_by_loader[loader] = [node]
+        for loader, loader_nodes in nodes_by_loader.items():
+            keys: List[Any] = []
+            seen: Dict[Any, Any] = {}
+            for node in loader_nodes:
+                key = node.key
+                if key not in seen:
+                    seen[key] = None
+                    keys.append(key)
+            batch_load = getattr(loader, "batch_load", None)
+            if batch_load is None:
+                batch_load = loader
+            try:
+                outcomes = list(batch_load(keys))
+            except Exception as error:
+                for node in loader_nodes:
+                    node.outcome = error
+            else:
+                if len(outcomes) != len(keys):
+                    error: Any = TypeError(
+                        "Loader returned an incorrect number of results:"
+                        f" expected {len(keys)}, got {len(outcomes)}."
+                    )
+                    for node in loader_nodes:
+                        node.outcome = error
+                else:
+                    outcome_by_key = dict(zip(keys, outcomes))
+                    for node in loader_nodes:
+                        node.outcome = outcome_by_key[node.key]
+
     def complete_value(
         self,
         return_type: GraphQLOutputType,
@@ -604,6 +746,11 @@ class ExecutionContext:
         Otherwise, the field type expects a sub-selection set, and will complete the
         value by evaluating all sub-selections.
         """
+        # If result is a deferred value, register it for batched loading and
+        # complete it once the current round of loaders has been dispatched.
+        if isinstance(result, DeferredValue):
+            return self.defer_value(result, return_type, field_nodes, info, path)
+
         # If result is an Exception, throw a located error.
         if isinstance(result, Exception):
             raise result
@@ -698,6 +845,7 @@ class ExecutionContext:
         is_awaitable = self.is_awaitable
         awaitable_indices: List[int] = []
         append_awaitable = awaitable_indices.append
+        contains_deferred = False
         completed_results: List[Any] = []
         append_result = completed_results.append
         for index, item in enumerate(result):
@@ -711,6 +859,9 @@ class ExecutionContext:
                     try:
                         completed = self.complete_value(
                             item_type, field_nodes, info, item_path, await item
+                        )
+                        completed = self.add_deferred_boundary(
+                            completed, item_type, field_nodes, item_path
                         )
                         if is_awaitable(completed):
                             return await completed
@@ -727,6 +878,9 @@ class ExecutionContext:
                 try:
                     completed_item = self.complete_value(
                         item_type, field_nodes, info, item_path, item
+                    )
+                    completed_item = self.add_deferred_boundary(
+                        completed_item, item_type, field_nodes, item_path
                     )
                     if is_awaitable(completed_item):
                         # noinspection PyShadowingNames
@@ -748,9 +902,13 @@ class ExecutionContext:
 
             if is_awaitable(completed_item):
                 append_awaitable(index)
+            elif isinstance(completed_item, DeferredNode):
+                contains_deferred = True
             append_result(completed_item)
 
         if not awaitable_indices:
+            if contains_deferred:
+                return DeferredListNode(completed_results)
             return completed_results
 
         # noinspection PyShadowingNames
@@ -762,6 +920,8 @@ class ExecutionContext:
                 ),
             ):
                 completed_results[index] = result
+            if contains_deferred:
+                return DeferredListNode(completed_results)  # type: ignore
             return completed_results
 
         return get_completed_results()
@@ -1035,12 +1195,17 @@ def execute(
             # noinspection PyShadowingNames
             async def await_result() -> Any:
                 try:
-                    return build_response(await result, errors)  # type: ignore
+                    data = await result  # type: ignore
+                    if exe_context.deferred_active:
+                        data = exe_context.complete_deferred(data)
+                    return build_response(data, errors)
                 except GraphQLError as error:
                     errors.append(error)
                     return build_response(None, errors)
 
             return await_result()
+        if exe_context.deferred_active:
+            result = exe_context.complete_deferred(result)
     except GraphQLError as error:
         errors.append(error)
         return build_response(None, errors)
@@ -1098,7 +1263,11 @@ def execute_sync(
 
     # Assert that the execution was synchronous.
     if isawaitable(result):
-        ensure_future(result).cancel()
+        if isinstance(result, Coroutine):
+            # Close the coroutine without starting an event loop.
+            result.close()
+        else:  # pragma: no cover
+            ensure_future(result).cancel()
         raise RuntimeError("GraphQL execution failed to complete synchronously.")
 
     return result

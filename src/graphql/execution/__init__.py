@@ -14,6 +14,7 @@ from .execute import (
     FormattedExecutionResult,
     Middleware,
 )
+from .deferred import DeferredValue, SyncBatchLoader
 from .map_async_iterator import MapAsyncIterator
 from .subscribe import subscribe, create_source_event_stream
 from .middleware import MiddlewareManager
@@ -26,6 +27,8 @@ __all__ = [
     "default_field_resolver",
     "default_type_resolver",
     "subscribe",
+    "DeferredValue",
+    "SyncBatchLoader",
     "ExecutionContext",
     "ExecutionResult",
     "FormattedExecutionResult",

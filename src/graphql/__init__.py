@@ -428,6 +428,9 @@ from .execution import (
     get_argument_values,
     get_directive_values,
     get_variable_values,
+    # Deferred values
+    DeferredValue,
+    SyncBatchLoader,
     # Types
     ExecutionContext,
     ExecutionResult,
@@ -686,6 +689,8 @@ __all__ = [
     "get_argument_values",
     "get_directive_values",
     "get_variable_values",
+    "DeferredValue",
+    "SyncBatchLoader",
     "ExecutionContext",
     "ExecutionResult",
     "FormattedExecutionResult",
