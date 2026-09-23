@@ -109,7 +109,11 @@ class PrintAstVisitor(Visitor):
 
     @staticmethod
     def leave_fragment_spread(node: PrintedNode, *_args: Any) -> str:
-        return f"...{node.name}{wrap(' ', join(node.directives, ' '))}"
+        return (
+            f"...{node.name}"
+            f"{wrap('(', join(node.arguments, ', '), ')')}"
+            f"{wrap(' ', join(node.directives, ' '))}"
+        )
 
     @staticmethod
     def leave_inline_fragment(node: PrintedNode, *_args: Any) -> str:

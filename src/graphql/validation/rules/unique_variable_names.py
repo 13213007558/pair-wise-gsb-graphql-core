@@ -1,8 +1,12 @@
 from operator import attrgetter
-from typing import Any
+from typing import Any, Tuple
 
 from ...error import GraphQLError
-from ...language import OperationDefinitionNode
+from ...language import (
+    FragmentDefinitionNode,
+    OperationDefinitionNode,
+    VariableDefinitionNode,
+)
 from ...pyutils import group_by
 from . import ASTValidationRule
 
@@ -18,8 +22,19 @@ class UniqueVariableNamesRule(ASTValidationRule):
     def enter_operation_definition(
         self, node: OperationDefinitionNode, *_args: Any
     ) -> None:
-        variable_definitions = node.variable_definitions
+        self.check_variable_uniqueness(node.variable_definitions)
 
+    def enter_fragment_definition(
+        self, node: FragmentDefinitionNode, *_args: Any
+    ) -> None:
+        # Experimental: fragment variable definitions (fragment arguments)
+        self.check_variable_uniqueness(node.variable_definitions)
+
+    def check_variable_uniqueness(
+        self, variable_definitions: Tuple[VariableDefinitionNode, ...]
+    ) -> None:
+        if not variable_definitions:
+            return
         seen_variable_definitions = group_by(
             variable_definitions, attrgetter("variable.name.value")
         )

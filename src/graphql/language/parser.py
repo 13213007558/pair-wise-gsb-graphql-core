@@ -75,6 +75,7 @@ def parse(
     no_location: bool = False,
     max_tokens: Optional[int] = None,
     allow_legacy_fragment_variables: bool = False,
+    allow_fragment_arguments: bool = False,
 ) -> DocumentNode:
     """Given a GraphQL source, parse it into a Document.
 
@@ -103,12 +104,31 @@ def parse(
         fragment A($var: Boolean = false) on T  {
           ...
         }
+
+    Experimental feature:
+
+    If ``allow_fragment_arguments`` is set to ``True``, the parser will
+    understand and parse variable definitions contained in a fragment
+    definition as well as arguments passed to fragment spreads. For example::
+
+        fragment A($var: Boolean = false) on T {
+          ...
+        }
+
+        query {
+          ...A(var: true)
+        }
+
+    The fragment spread arguments will be represented in the
+    :attr:`~graphql.language.FragmentSpreadNode.arguments` field of the
+    :class:`~graphql.language.FragmentSpreadNode`.
     """
     parser = Parser(
         source,
         no_location=no_location,
         max_tokens=max_tokens,
         allow_legacy_fragment_variables=allow_legacy_fragment_variables,
+        allow_fragment_arguments=allow_fragment_arguments,
     )
     return parser.parse_document()
 
@@ -208,6 +228,7 @@ class Parser:
     _no_location: bool
     _max_tokens: Optional[int]
     _allow_legacy_fragment_variables: bool
+    _allow_fragment_arguments: bool
     _token_counter: int
 
     def __init__(
@@ -216,6 +237,7 @@ class Parser:
         no_location: bool = False,
         max_tokens: Optional[int] = None,
         allow_legacy_fragment_variables: bool = False,
+        allow_fragment_arguments: bool = False,
     ):
         source = (
             cast(Source, source) if is_source(source) else Source(cast(str, source))
@@ -225,6 +247,7 @@ class Parser:
         self._no_location = no_location
         self._max_tokens = max_tokens
         self._allow_legacy_fragment_variables = allow_legacy_fragment_variables
+        self._allow_fragment_arguments = allow_fragment_arguments
         self._token_counter = 0
 
     def parse_name(self) -> NameNode:
@@ -434,6 +457,11 @@ class Parser:
         if not has_type_condition and self.peek(TokenKind.NAME):
             return FragmentSpreadNode(
                 name=self.parse_fragment_name(),
+                arguments=(
+                    self.parse_arguments(False)
+                    if self._allow_fragment_arguments
+                    else None
+                ),
                 directives=self.parse_directives(False),
                 loc=self.loc(start),
             )
@@ -450,7 +478,7 @@ class Parser:
         self.expect_keyword("fragment")
         # Legacy support for defining variables within fragments changes
         # the grammar of FragmentDefinition
-        if self._allow_legacy_fragment_variables:
+        if self._allow_legacy_fragment_variables or self._allow_fragment_arguments:
             return FragmentDefinitionNode(
                 name=self.parse_fragment_name(),
                 variable_definitions=self.parse_variable_definitions(),

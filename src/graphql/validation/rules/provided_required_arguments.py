@@ -5,9 +5,11 @@ from ...language import (
     DirectiveDefinitionNode,
     DirectiveNode,
     FieldNode,
+    FragmentSpreadNode,
     InputValueDefinitionNode,
     NonNullTypeNode,
     TypeNode,
+    VariableDefinitionNode,
     VisitorAction,
     SKIP,
     print_ast,
@@ -114,6 +116,35 @@ class ProvidedRequiredArgumentsRule(ProvidedRequiredArgumentsOnDirectivesRule):
 
         return None
 
+    def leave_fragment_spread(
+        self, spread_node: FragmentSpreadNode, *_args: Any
+    ) -> None:
+        # Experimental: check that all required fragment parameters
+        # (fragment arguments feature) have been provided.
+        fragment = self.context.get_fragment(spread_node.name.value)
+        if not fragment:
+            return
+        var_def_nodes = fragment.variable_definitions or ()
+        if not var_def_nodes:
+            return
+        arg_node_set = {arg.name.value for arg in spread_node.arguments or ()}
+        for var_def_node in var_def_nodes:
+            if not is_required_argument_node(var_def_node):
+                continue
+            arg_name = var_def_node.variable.name.value
+            if arg_name not in arg_node_set:
+                arg_type_str = print_ast(var_def_node.type)
+                self.report_error(
+                    GraphQLError(
+                        f"Fragment '{fragment.name.value}' argument '{arg_name}'"
+                        f" of type '{arg_type_str}' is required,"
+                        " but it was not provided.",
+                        spread_node,
+                    )
+                )
 
-def is_required_argument_node(arg: InputValueDefinitionNode) -> bool:
+
+def is_required_argument_node(
+    arg: Union[InputValueDefinitionNode, VariableDefinitionNode],
+) -> bool:
     return isinstance(arg.type, NonNullTypeNode) and arg.default_value is None

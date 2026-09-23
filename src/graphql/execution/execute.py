@@ -223,6 +223,18 @@ class ExecutionContext:
         if is_awaitable:
             self.is_awaitable = is_awaitable  # type: ignore
         self._subfields_cache: Dict[Tuple, Dict[str, List[FieldNode]]] = {}
+        self._field_scopes: Dict[int, Dict[str, Any]] = {}
+
+    def get_variable_values_for_field(
+        self, field_node: FieldNode
+    ) -> Dict[str, Any]:
+        """Get the variable values in scope for the given field node.
+
+        For the experimental fragment arguments feature, each fragment
+        spread introduces a new scope of variable values. For all other
+        fields, these are simply the variable values of the operation.
+        """
+        return self._field_scopes.get(id(field_node), self.variable_values)
 
     @classmethod
     def build(
@@ -348,6 +360,7 @@ class ExecutionContext:
             self.variable_values,
             root_type,
             operation.selection_set,
+            self._field_scopes,
         )
 
         path = None
@@ -516,7 +529,11 @@ class ExecutionContext:
         try:
             # Build a dictionary of arguments from the field.arguments AST, using the
             # variables scope to fulfill any variable references.
-            args = get_argument_values(field_def, field_nodes[0], self.variable_values)
+            args = get_argument_values(
+                field_def,
+                field_nodes[0],
+                self.get_variable_values_for_field(field_nodes[0]),
+            )
 
             # Note that contrary to the JavaScript implementation, we pass the context
             # value as part of the resolve info.
@@ -959,6 +976,7 @@ class ExecutionContext:
                 self.variable_values,
                 return_type,
                 field_nodes,
+                self._field_scopes,
             )
             cache[key] = sub_field_nodes
         return sub_field_nodes

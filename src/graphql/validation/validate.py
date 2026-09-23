@@ -1,7 +1,7 @@
 from typing import Collection, List, Optional, Type
 
 from ..error import GraphQLError
-from ..language import DocumentNode, ParallelVisitor, visit
+from ..language import DocumentNode, FragmentDefinitionNode, ParallelVisitor, visit
 from ..pyutils import inspect, is_collection
 from ..type import GraphQLSchema, assert_valid_schema
 from ..utilities import TypeInfo, TypeInfoVisitor
@@ -61,6 +61,17 @@ def validate(
         raise TypeError(
             "Rules must be specified as a collection of ASTValidationRule subclasses."
         )
+
+    # Provide the fragment definitions to the type info, so that arguments
+    # of fragment spreads (experimental fragment arguments feature) can be
+    # typed with the variable definitions of the referenced fragments.
+    type_info.set_fragment_definitions(
+        {
+            definition.name.value: definition
+            for definition in document_ast.definitions
+            if isinstance(definition, FragmentDefinitionNode)
+        }
+    )
 
     errors: List[GraphQLError] = []
 

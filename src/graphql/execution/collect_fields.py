@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Set, Union, cast
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 from ..language import (
     FieldNode,
@@ -16,9 +16,32 @@ from ..type import (
     is_abstract_type,
 )
 from ..utilities.type_from_ast import type_from_ast
-from .values import get_directive_values
+from .values import get_directive_values, get_fragment_variable_values
 
 __all__ = ["collect_fields", "collect_sub_fields"]
+
+# Maps the id of a field node to the scoped variable values that were in
+# effect when the field was collected. Used to support the experimental
+# fragment arguments feature, where each fragment spread introduces a new
+# scope of variable values.
+FieldScopes = Dict[int, Dict[str, Any]]
+
+# Key used to identify a visited fragment spread. For the experimental
+# fragment arguments feature, this comprises the fragment name and the
+# evaluated argument values, so that the same fragment can be spread
+# multiple times with differing arguments.
+VisitedFragmentKey = Union[str, Tuple[str, Any]]
+
+
+def freeze_value(value: Any) -> Any:
+    """Convert a value into a hashable structure (used for visited keys)."""
+    if isinstance(value, dict):
+        return tuple(
+            sorted((key, freeze_value(item)) for key, item in value.items())
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(freeze_value(item) for item in value)
+    return value
 
 
 def collect_fields(
@@ -27,6 +50,7 @@ def collect_fields(
     variable_values: Dict[str, Any],
     runtime_type: GraphQLObjectType,
     selection_set: SelectionSetNode,
+    field_scopes: Optional[FieldScopes] = None,
 ) -> Dict[str, List[FieldNode]]:
     """Collect fields.
 
@@ -40,7 +64,14 @@ def collect_fields(
     """
     fields: Dict[str, List[FieldNode]] = {}
     collect_fields_impl(
-        schema, fragments, variable_values, runtime_type, selection_set, fields, set()
+        schema,
+        fragments,
+        variable_values,
+        runtime_type,
+        selection_set,
+        fields,
+        set(),
+        field_scopes,
     )
     return fields
 
@@ -51,6 +82,7 @@ def collect_sub_fields(
     variable_values: Dict[str, Any],
     return_type: GraphQLObjectType,
     field_nodes: List[FieldNode],
+    field_scopes: Optional[FieldScopes] = None,
 ) -> Dict[str, List[FieldNode]]:
     """Collect sub fields.
 
@@ -64,17 +96,23 @@ def collect_sub_fields(
     For internal use only.
     """
     sub_field_nodes: Dict[str, List[FieldNode]] = {}
-    visited_fragment_names: Set[str] = set()
+    visited_fragment_names: Set[VisitedFragmentKey] = set()
     for node in field_nodes:
         if node.selection_set:
+            node_variable_values = (
+                field_scopes.get(id(node), variable_values)
+                if field_scopes is not None
+                else variable_values
+            )
             collect_fields_impl(
                 schema,
                 fragments,
-                variable_values,
+                node_variable_values,
                 return_type,
                 node.selection_set,
                 sub_field_nodes,
                 visited_fragment_names,
+                field_scopes,
             )
     return sub_field_nodes
 
@@ -86,7 +124,8 @@ def collect_fields_impl(
     runtime_type: GraphQLObjectType,
     selection_set: SelectionSetNode,
     fields: Dict[str, List[FieldNode]],
-    visited_fragment_names: Set[str],
+    visited_fragment_names: Set[VisitedFragmentKey],
+    field_scopes: Optional[FieldScopes] = None,
 ) -> None:
     """Collect fields (internal implementation)."""
     for selection in selection_set.selections:
@@ -95,6 +134,8 @@ def collect_fields_impl(
                 continue
             name = get_field_entry_key(selection)
             fields.setdefault(name, []).append(selection)
+            if field_scopes is not None:
+                field_scopes[id(selection)] = variable_values
         elif isinstance(selection, InlineFragmentNode):
             if not should_include_node(
                 variable_values, selection
@@ -108,27 +149,48 @@ def collect_fields_impl(
                 selection.selection_set,
                 fields,
                 visited_fragment_names,
+                field_scopes,
             )
         elif isinstance(selection, FragmentSpreadNode):  # pragma: no cover else
             frag_name = selection.name.value
-            if frag_name in visited_fragment_names or not should_include_node(
-                variable_values, selection
-            ):
+            if not should_include_node(variable_values, selection):
                 continue
-            visited_fragment_names.add(frag_name)
             fragment = fragments.get(frag_name)
-            if not fragment or not does_fragment_condition_match(
-                schema, fragment, runtime_type
-            ):
+            if not fragment:
+                continue
+            frag_variable_values = variable_values
+            visited_key: VisitedFragmentKey = frag_name
+            var_def_nodes = fragment.variable_definitions
+            if var_def_nodes:
+                # Experimental: fragment arguments. Evaluate the arguments
+                # of the spread in the current scope and create a new scope
+                # for the fragment body in which the fragment parameters
+                # shadow any variables with the same name.
+                param_values = get_fragment_variable_values(
+                    schema, fragment, selection, variable_values
+                )
+                frag_variable_values = dict(variable_values)
+                for var_def_node in var_def_nodes:
+                    var_name = var_def_node.variable.name.value
+                    if var_name in param_values:
+                        frag_variable_values[var_name] = param_values[var_name]
+                    else:
+                        frag_variable_values.pop(var_name, None)
+                visited_key = (frag_name, freeze_value(param_values))
+            if visited_key in visited_fragment_names:
+                continue
+            visited_fragment_names.add(visited_key)
+            if not does_fragment_condition_match(schema, fragment, runtime_type):
                 continue
             collect_fields_impl(
                 schema,
                 fragments,
-                variable_values,
+                frag_variable_values,
                 runtime_type,
                 fragment.selection_set,
                 fields,
                 visited_fragment_names,
+                field_scopes,
             )
 
 

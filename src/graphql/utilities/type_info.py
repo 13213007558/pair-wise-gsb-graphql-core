@@ -1,10 +1,12 @@
-from typing import Any, Callable, List, Optional, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 from ..language import (
     ArgumentNode,
     DirectiveNode,
     EnumValueNode,
     FieldNode,
+    FragmentDefinitionNode,
+    FragmentSpreadNode,
     InlineFragmentNode,
     ListValueNode,
     Node,
@@ -85,6 +87,8 @@ class TypeInfo:
         self._directive: Optional[GraphQLDirective] = None
         self._argument: Optional[GraphQLArgument] = None
         self._enum_value: Optional[GraphQLEnumValue] = None
+        self._fragment_definitions: Dict[str, FragmentDefinitionNode] = {}
+        self._fragment_spread: Optional[FragmentSpreadNode] = None
         self._get_field_def: GetFieldDefFn = get_field_def_fn or get_field_def
         if initial_type:
             if is_input_type(initial_type):
@@ -184,6 +188,23 @@ class TypeInfo:
 
     enter_fragment_definition = enter_inline_fragment
 
+    def set_fragment_definitions(
+        self, fragment_definitions: Dict[str, FragmentDefinitionNode]
+    ) -> None:
+        """Set the fragment definitions of the visited document.
+
+        This is needed to support the experimental fragment arguments
+        feature, where the type of a fragment spread argument is determined
+        by the variable definitions of the referenced fragment definition.
+        """
+        self._fragment_definitions = fragment_definitions
+
+    def enter_fragment_spread(self, node: FragmentSpreadNode) -> None:
+        self._fragment_spread = node
+
+    def leave_fragment_spread(self) -> None:
+        self._fragment_spread = None
+
     def enter_variable_definition(self, node: VariableDefinitionNode) -> None:
         input_type = type_from_ast(self._schema, node.type)
         self._input_type_stack.append(
@@ -191,6 +212,35 @@ class TypeInfo:
         )
 
     def enter_argument(self, node: ArgumentNode) -> None:
+        fragment_spread = self._fragment_spread
+        if fragment_spread is not None and self._directive is None:
+            # Experimental: the argument of a fragment spread gets its type
+            # from the variable definitions of the referenced fragment.
+            arg_type = None
+            default_value: Any = Undefined
+            fragment_def = self._fragment_definitions.get(
+                fragment_spread.name.value
+            )
+            if fragment_def:
+                for var_def in fragment_def.variable_definitions or ():
+                    if var_def.variable.name.value == node.name.value:
+                        var_type = type_from_ast(self._schema, var_def.type)
+                        if is_input_type(var_type):
+                            arg_type = var_type
+                        default_value = (
+                            var_def.default_value
+                            if var_def.default_value is not None
+                            else Undefined
+                        )
+                        break
+            self._argument = None
+            self._default_value_stack.append(default_value)
+            self._input_type_stack.append(
+                cast(GraphQLInputType, arg_type)
+                if arg_type is not None
+                else None
+            )
+            return
         field_or_directive = self.get_directive() or self.get_field_def()
         if field_or_directive:
             arg_def = field_or_directive.args.get(node.name.value)

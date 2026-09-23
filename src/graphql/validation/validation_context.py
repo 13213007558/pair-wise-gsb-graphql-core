@@ -221,7 +221,19 @@ class ValidationContext(ASTValidationContext):
             get_variable_usages = self.get_variable_usages
             usages = get_variable_usages(operation)
             for fragment in self.get_recursively_referenced_fragments(operation):
-                usages.extend(get_variable_usages(fragment))
+                # Variables that are declared as parameters of a fragment
+                # (experimental fragment arguments feature) are bound within
+                # that fragment and shadow operation variables, so they are
+                # not usages of operation variables.
+                parameter_names = {
+                    variable_def.variable.name.value
+                    for variable_def in fragment.variable_definitions or ()
+                }
+                usages.extend(
+                    usage
+                    for usage in get_variable_usages(fragment)
+                    if usage.node.name.value not in parameter_names
+                )
             self._recursive_variable_usages[operation] = usages
         return usages
 

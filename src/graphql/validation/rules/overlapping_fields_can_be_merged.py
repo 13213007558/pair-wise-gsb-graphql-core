@@ -8,8 +8,12 @@ from ...language import (
     FragmentDefinitionNode,
     FragmentSpreadNode,
     InlineFragmentNode,
+    ListValueNode,
+    ObjectFieldNode,
+    ObjectValueNode,
     SelectionSetNode,
     ValueNode,
+    VariableNode,
     print_ast,
 )
 from ...type import (
@@ -94,10 +98,77 @@ if MYPY:  # recursive types not fully supported yet (/python/mypy/issues/731)
     ConflictReasonMessage = Union[str, List]
 else:
     ConflictReasonMessage = Union[str, List[ConflictReason]]
-# Tuple defining a field node in a context.
-NodeAndDef = Tuple[GraphQLCompositeType, FieldNode, Optional[GraphQLField]]
+# Map of fragment parameter names to argument value nodes, describing the
+# fragment variable environment in which a selection is reached.
+# This is only used by the experimental fragment arguments feature and stays
+# empty when that feature is not in use.
+FragmentVariableEnv = Dict[str, ValueNode]
+# Tuple defining a field node in a context, including the fragment variable
+# environment in which the field was reached.
+NodeAndDef = Tuple[
+    Optional[GraphQLCompositeType],
+    FieldNode,
+    Optional[GraphQLField],
+    FragmentVariableEnv,
+]
 # Dictionary of lists of those.
 NodeAndDefCollection = Dict[str, List[NodeAndDef]]
+# A reference to a fragment via a fragment spread: the name of the fragment
+# and the variable environment created from the arguments passed at the
+# spread site (fragment arguments feature).
+FragmentReference = Tuple[str, FragmentVariableEnv]
+# Dictionary of fragment references, keyed by their unique reference key.
+FragmentReferenceCollection = Dict["FragmentReferenceKey", FragmentReference]
+# A unique key for a fragment reference, comprising the fragment name and the
+# arguments passed at the spread site.
+FragmentReferenceKey = Tuple[str, Tuple[Tuple[str, str], ...]]
+
+EMPTY_VARIABLE_ENV: FragmentVariableEnv = {}
+
+
+def fragment_variable_env_key(
+    env: FragmentVariableEnv,
+) -> Tuple[Tuple[str, str], ...]:
+    """Get a hashable key for a fragment variable environment."""
+    return tuple(sorted((name, stringify_value(value)) for name, value in env.items()))
+
+
+def fragment_reference_key(reference: FragmentReference) -> FragmentReferenceKey:
+    """Get a key uniquely identifying a fragment reference.
+
+    Two references to the same fragment with differing arguments (fragment
+    arguments feature) are considered different references, since they
+    describe different expansions of the fragment.
+    """
+    name, env = reference
+    return name, fragment_variable_env_key(env)
+
+
+def substitute_variables(node: ValueNode, env: FragmentVariableEnv) -> ValueNode:
+    """Substitute fragment parameters in a value node.
+
+    Replaces variables that are bound in the given fragment variable
+    environment with the corresponding argument value nodes.
+    """
+    if not env:
+        return node
+    if isinstance(node, VariableNode):
+        return env.get(node.name.value, node)
+    if isinstance(node, ListValueNode):
+        return ListValueNode(
+            values=[substitute_variables(value, env) for value in node.values]
+        )
+    if isinstance(node, ObjectValueNode):
+        return ObjectValueNode(
+            fields=[
+                ObjectFieldNode(
+                    name=field.name,
+                    value=substitute_variables(field.value, env),
+                )
+                for field in node.fields
+            ]
+        )
+    return node
 
 
 # Algorithm:
@@ -169,8 +240,12 @@ def find_conflicts_within_selection_set(
     """
     conflicts: List[Conflict] = []
 
-    field_map, fragment_names = get_fields_and_fragment_names(
-        context, cached_fields_and_fragment_names, parent_type, selection_set
+    field_map, fragment_refs = get_fields_and_fragment_names(
+        context,
+        cached_fields_and_fragment_names,
+        parent_type,
+        selection_set,
+        EMPTY_VARIABLE_ENV,
     )
 
     # (A) Find all conflicts "within" the fields of this selection set.
@@ -183,10 +258,11 @@ def find_conflicts_within_selection_set(
         field_map,
     )
 
-    if fragment_names:
+    if fragment_refs:
+        fragment_references = list(fragment_refs.items())
         # (B) Then collect conflicts between these fields and those represented by each
         # spread fragment name found.
-        for i, fragment_name in enumerate(fragment_names):
+        for i, (_ref_key, fragment_ref) in enumerate(fragment_references):
             collect_conflicts_between_fields_and_fragment(
                 context,
                 conflicts,
@@ -194,21 +270,21 @@ def find_conflicts_within_selection_set(
                 compared_fragment_pairs,
                 False,
                 field_map,
-                fragment_name,
+                fragment_ref,
             )
             # (C) Then compare this fragment with all other fragments found in this
             # selection set to collect conflicts within fragments spread together.
             # This compares each item in the list of fragment names to every other
             # item in that same list (except for itself).
-            for other_fragment_name in fragment_names[i + 1 :]:
+            for _other_key, other_fragment_ref in fragment_references[i + 1 :]:
                 collect_conflicts_between_fragments(
                     context,
                     conflicts,
                     cached_fields_and_fragment_names,
                     compared_fragment_pairs,
                     False,
-                    fragment_name,
-                    other_fragment_name,
+                    fragment_ref,
+                    other_fragment_ref,
                 )
 
     return conflicts
@@ -221,19 +297,20 @@ def collect_conflicts_between_fields_and_fragment(
     compared_fragment_pairs: "PairSet",
     are_mutually_exclusive: bool,
     field_map: NodeAndDefCollection,
-    fragment_name: str,
+    fragment_reference: FragmentReference,
 ) -> None:
     """Collect conflicts between fields and fragment.
 
     Collect all conflicts found between a set of fields and a fragment reference
     including via spreading in any nested fragments.
     """
+    fragment_name, fragment_env = fragment_reference
     fragment = context.get_fragment(fragment_name)
     if not fragment:
         return None
 
     field_map2, referenced_fragment_names = get_referenced_fields_and_fragment_names(
-        context, cached_fields_and_fragment_names, fragment
+        context, cached_fields_and_fragment_names, fragment, fragment_env
     )
 
     # Do not compare a fragment's fieldMap to itself.
@@ -254,14 +331,15 @@ def collect_conflicts_between_fields_and_fragment(
 
     # (E) Then collect any conflicts between the provided collection of fields and any
     # fragment names found in the given fragment.
-    for referenced_fragment_name in referenced_fragment_names:
+    fragment_key = fragment_reference_key(fragment_reference)
+    for referenced_key, referenced_ref in referenced_fragment_names.items():
         # Memoize so two fragments are not compared for conflicts more than once.
         if compared_fragment_pairs.has(
-            referenced_fragment_name, fragment_name, are_mutually_exclusive
+            referenced_key, fragment_key, are_mutually_exclusive
         ):
             continue
         compared_fragment_pairs.add(
-            referenced_fragment_name, fragment_name, are_mutually_exclusive
+            referenced_key, fragment_key, are_mutually_exclusive
         )
 
         collect_conflicts_between_fields_and_fragment(
@@ -271,7 +349,7 @@ def collect_conflicts_between_fields_and_fragment(
             compared_fragment_pairs,
             are_mutually_exclusive,
             field_map,
-            referenced_fragment_name,
+            referenced_ref,
         )
 
 
@@ -281,36 +359,42 @@ def collect_conflicts_between_fragments(
     cached_fields_and_fragment_names: Dict,
     compared_fragment_pairs: "PairSet",
     are_mutually_exclusive: bool,
-    fragment_name1: str,
-    fragment_name2: str,
+    fragment_ref1: FragmentReference,
+    fragment_ref2: FragmentReference,
 ) -> None:
     """Collect conflicts between fragments.
 
     Collect all conflicts found between two fragments, including via spreading in any
     nested fragments.
     """
-    # No need to compare a fragment to itself.
-    if fragment_name1 == fragment_name2:
+    # No need to compare a fragment reference to itself. Note that two
+    # references to the same fragment with differing arguments (fragment
+    # arguments feature) are different references and must be compared.
+    ref_key1 = fragment_reference_key(fragment_ref1)
+    ref_key2 = fragment_reference_key(fragment_ref2)
+    if ref_key1 == ref_key2:
         return
 
     # Memoize so two fragments are not compared for conflicts more than once.
     if compared_fragment_pairs.has(
-        fragment_name1, fragment_name2, are_mutually_exclusive
+        ref_key1, ref_key2, are_mutually_exclusive
     ):
         return
-    compared_fragment_pairs.add(fragment_name1, fragment_name2, are_mutually_exclusive)
+    compared_fragment_pairs.add(ref_key1, ref_key2, are_mutually_exclusive)
 
+    fragment_name1, fragment_env1 = fragment_ref1
+    fragment_name2, fragment_env2 = fragment_ref2
     fragment1 = context.get_fragment(fragment_name1)
     fragment2 = context.get_fragment(fragment_name2)
     if not fragment1 or not fragment2:
         return None
 
     field_map1, referenced_fragment_names1 = get_referenced_fields_and_fragment_names(
-        context, cached_fields_and_fragment_names, fragment1
+        context, cached_fields_and_fragment_names, fragment1, fragment_env1
     )
 
     field_map2, referenced_fragment_names2 = get_referenced_fields_and_fragment_names(
-        context, cached_fields_and_fragment_names, fragment2
+        context, cached_fields_and_fragment_names, fragment2, fragment_env2
     )
 
     # (F) First, collect all conflicts between these two collections of fields
@@ -327,28 +411,28 @@ def collect_conflicts_between_fragments(
 
     # (G) Then collect conflicts between the first fragment and any nested fragments
     # spread in the second fragment.
-    for referenced_fragment_name2 in referenced_fragment_names2:
+    for referenced_ref2 in referenced_fragment_names2.values():
         collect_conflicts_between_fragments(
             context,
             conflicts,
             cached_fields_and_fragment_names,
             compared_fragment_pairs,
             are_mutually_exclusive,
-            fragment_name1,
-            referenced_fragment_name2,
+            fragment_ref1,
+            referenced_ref2,
         )
 
     # (G) Then collect conflicts between the second fragment and any nested fragments
     # spread in the first fragment.
-    for referenced_fragment_name1 in referenced_fragment_names1:
+    for referenced_ref1 in referenced_fragment_names1.values():
         collect_conflicts_between_fragments(
             context,
             conflicts,
             cached_fields_and_fragment_names,
             compared_fragment_pairs,
             are_mutually_exclusive,
-            referenced_fragment_name1,
-            fragment_name2,
+            referenced_ref1,
+            fragment_ref2,
         )
 
 
@@ -359,8 +443,10 @@ def find_conflicts_between_sub_selection_sets(
     are_mutually_exclusive: bool,
     parent_type1: Optional[GraphQLNamedType],
     selection_set1: SelectionSetNode,
+    variable_env1: FragmentVariableEnv,
     parent_type2: Optional[GraphQLNamedType],
     selection_set2: SelectionSetNode,
+    variable_env2: FragmentVariableEnv,
 ) -> List[Conflict]:
     """Find conflicts between sub selection sets.
 
@@ -371,10 +457,18 @@ def find_conflicts_between_sub_selection_sets(
     conflicts: List[Conflict] = []
 
     field_map1, fragment_names1 = get_fields_and_fragment_names(
-        context, cached_fields_and_fragment_names, parent_type1, selection_set1
+        context,
+        cached_fields_and_fragment_names,
+        parent_type1,
+        selection_set1,
+        variable_env1,
     )
     field_map2, fragment_names2 = get_fields_and_fragment_names(
-        context, cached_fields_and_fragment_names, parent_type2, selection_set2
+        context,
+        cached_fields_and_fragment_names,
+        parent_type2,
+        selection_set2,
+        variable_env2,
     )
 
     # (H) First, collect all conflicts between these two collections of field.
@@ -391,7 +485,7 @@ def find_conflicts_between_sub_selection_sets(
     # (I) Then collect conflicts between the first collection of fields and those
     # referenced by each fragment name associated with the second.
     if fragment_names2:
-        for fragment_name2 in fragment_names2:
+        for fragment_ref2 in fragment_names2.values():
             collect_conflicts_between_fields_and_fragment(
                 context,
                 conflicts,
@@ -399,13 +493,13 @@ def find_conflicts_between_sub_selection_sets(
                 compared_fragment_pairs,
                 are_mutually_exclusive,
                 field_map1,
-                fragment_name2,
+                fragment_ref2,
             )
 
     # (I) Then collect conflicts between the second collection of fields and those
     # referenced by each fragment name associated with the first.
     if fragment_names1:
-        for fragment_name1 in fragment_names1:
+        for fragment_ref1 in fragment_names1.values():
             collect_conflicts_between_fields_and_fragment(
                 context,
                 conflicts,
@@ -413,22 +507,22 @@ def find_conflicts_between_sub_selection_sets(
                 compared_fragment_pairs,
                 are_mutually_exclusive,
                 field_map2,
-                fragment_name1,
+                fragment_ref1,
             )
 
     # (J) Also collect conflicts between any fragment names by the first and fragment
     # names by the second. This compares each item in the first set of names to each
     # item in the second set of names.
-    for fragment_name1 in fragment_names1:
-        for fragment_name2 in fragment_names2:
+    for fragment_ref1 in fragment_names1.values():
+        for fragment_ref2 in fragment_names2.values():
             collect_conflicts_between_fragments(
                 context,
                 conflicts,
                 cached_fields_and_fragment_names,
                 compared_fragment_pairs,
                 are_mutually_exclusive,
-                fragment_name1,
-                fragment_name2,
+                fragment_ref1,
+                fragment_ref2,
             )
 
     return conflicts
@@ -520,8 +614,8 @@ def find_conflict(
     Determines if there is a conflict between two particular fields, including comparing
     their sub-fields.
     """
-    parent_type1, node1, def1 = field1
-    parent_type2, node2, def2 = field2
+    parent_type1, node1, def1, variable_env1 = field1
+    parent_type2, node2, def2, variable_env2 = field2
 
     # If it is known that two fields could not possibly apply at the same time, due to
     # the parent types, then it is safe to permit them to diverge in aliased field or
@@ -551,7 +645,7 @@ def find_conflict(
             )
 
         # Two field calls must have the same arguments.
-        if not same_arguments(node1, node2):
+        if not same_arguments(node1, node2, variable_env1, variable_env2):
             return (response_name, "they have differing arguments"), [node1], [node2]
 
     if type1 and type2 and do_types_conflict(type1, type2):
@@ -574,8 +668,10 @@ def find_conflict(
             are_mutually_exclusive,
             get_named_type(type1),
             selection_set1,
+            variable_env1,
             get_named_type(type2),
             selection_set2,
+            variable_env2,
         )
         return subfield_conflicts(conflicts, response_name, node1, node2)
 
@@ -583,7 +679,10 @@ def find_conflict(
 
 
 def same_arguments(
-    node1: Union[FieldNode, DirectiveNode], node2: Union[FieldNode, DirectiveNode]
+    node1: Union[FieldNode, DirectiveNode],
+    node2: Union[FieldNode, DirectiveNode],
+    variable_env1: FragmentVariableEnv = EMPTY_VARIABLE_ENV,
+    variable_env2: FragmentVariableEnv = EMPTY_VARIABLE_ENV,
 ) -> bool:
     args1 = node1.arguments
     args2 = node2.arguments
@@ -600,9 +699,12 @@ def same_arguments(
     values2 = {arg.name.value: arg.value for arg in args2}
 
     for arg1 in args1:
-        value1 = arg1.value
+        value1 = substitute_variables(arg1.value, variable_env1)
         value2 = values2.get(arg1.name.value)
-        if value2 is None or stringify_value(value1) != stringify_value(value2):
+        if value2 is None:
+            return False
+        value2 = substitute_variables(value2, variable_env2)
+        if stringify_value(value1) != stringify_value(value2):
             return False
 
     return True
@@ -649,22 +751,29 @@ def get_fields_and_fragment_names(
     cached_fields_and_fragment_names: Dict,
     parent_type: Optional[GraphQLNamedType],
     selection_set: SelectionSetNode,
-) -> Tuple[NodeAndDefCollection, List[str]]:
+    variable_env: FragmentVariableEnv,
+) -> Tuple[NodeAndDefCollection, FragmentReferenceCollection]:
     """Get fields and referenced fragment names
 
     Given a selection set, return the collection of fields (a mapping of response name
     to field nodes and definitions) as well as a list of fragment names referenced via
     fragment spreads.
     """
-    cached = cached_fields_and_fragment_names.get(selection_set)
+    cache_key = (selection_set, fragment_variable_env_key(variable_env))
+    cached = cached_fields_and_fragment_names.get(cache_key)
     if not cached:
         node_and_defs: NodeAndDefCollection = {}
-        fragment_names: Dict[str, bool] = {}
+        fragment_refs: FragmentReferenceCollection = {}
         collect_fields_and_fragment_names(
-            context, parent_type, selection_set, node_and_defs, fragment_names
+            context,
+            parent_type,
+            selection_set,
+            variable_env,
+            node_and_defs,
+            fragment_refs,
         )
-        cached = (node_and_defs, list(fragment_names))
-        cached_fields_and_fragment_names[selection_set] = cached
+        cached = (node_and_defs, fragment_refs)
+        cached_fields_and_fragment_names[cache_key] = cached
     return cached
 
 
@@ -672,20 +781,20 @@ def get_referenced_fields_and_fragment_names(
     context: ValidationContext,
     cached_fields_and_fragment_names: Dict,
     fragment: FragmentDefinitionNode,
-) -> Tuple[NodeAndDefCollection, List[str]]:
+    fragment_env: FragmentVariableEnv,
+) -> Tuple[NodeAndDefCollection, FragmentReferenceCollection]:
     """Get referenced fields and nested fragment names
 
     Given a reference to a fragment, return the represented collection of fields as well
     as a list of nested fragment names referenced via fragment spreads.
     """
-    # Short-circuit building a type from the node if possible.
-    cached = cached_fields_and_fragment_names.get(fragment.selection_set)
-    if cached:
-        return cached
-
     fragment_type = type_from_ast(context.schema, fragment.type_condition)
     return get_fields_and_fragment_names(
-        context, cached_fields_and_fragment_names, fragment_type, fragment.selection_set
+        context,
+        cached_fields_and_fragment_names,
+        fragment_type,
+        fragment.selection_set,
+        fragment_env,
     )
 
 
@@ -693,8 +802,9 @@ def collect_fields_and_fragment_names(
     context: ValidationContext,
     parent_type: Optional[GraphQLNamedType],
     selection_set: SelectionSetNode,
+    variable_env: FragmentVariableEnv,
     node_and_defs: NodeAndDefCollection,
-    fragment_names: Dict[str, bool],
+    fragment_refs: FragmentReferenceCollection,
 ) -> None:
     for selection in selection_set.selections:
         if isinstance(selection, FieldNode):
@@ -708,10 +818,11 @@ def collect_fields_and_fragment_names(
             if not node_and_defs.get(response_name):
                 node_and_defs[response_name] = []
             node_and_defs[response_name].append(
-                cast(NodeAndDef, (parent_type, selection, field_def))
+                cast(NodeAndDef, (parent_type, selection, field_def, variable_env))
             )
         elif isinstance(selection, FragmentSpreadNode):
-            fragment_names[selection.name.value] = True
+            fragment_ref = get_fragment_reference(context, selection, variable_env)
+            fragment_refs[fragment_reference_key(fragment_ref)] = fragment_ref
         elif isinstance(selection, InlineFragmentNode):  # pragma: no cover else
             type_condition = selection.type_condition
             inline_fragment_type = (
@@ -723,9 +834,42 @@ def collect_fields_and_fragment_names(
                 context,
                 inline_fragment_type,
                 selection.selection_set,
+                variable_env,
                 node_and_defs,
-                fragment_names,
+                fragment_refs,
             )
+
+
+def get_fragment_reference(
+    context: ValidationContext,
+    spread: FragmentSpreadNode,
+    variable_env: FragmentVariableEnv,
+) -> FragmentReference:
+    """Get the fragment reference for a fragment spread.
+
+    The reference comprises the name of the fragment and the variable
+    environment created from the arguments passed at the spread site
+    (experimental fragment arguments feature). Variables in the argument
+    values are substituted with the current environment, so that the
+    resulting environment only contains values from the perspective of the
+    fragment body.
+    """
+    fragment_name = spread.name.value
+    arguments = spread.arguments
+    fragment = context.get_fragment(fragment_name)
+    var_def_nodes = fragment.variable_definitions if fragment else None
+    if not var_def_nodes:
+        return fragment_name, EMPTY_VARIABLE_ENV
+    arg_value_map = {arg.name.value: arg.value for arg in arguments or ()}
+    reference_env: FragmentVariableEnv = {}
+    for var_def_node in var_def_nodes or ():
+        var_name = var_def_node.variable.name.value
+        arg_value = arg_value_map.get(var_name)
+        if arg_value is not None:
+            reference_env[var_name] = substitute_variables(arg_value, variable_env)
+        elif var_def_node.default_value is not None:
+            reference_env[var_name] = var_def_node.default_value
+    return fragment_name, reference_env
 
 
 def subfield_conflicts(
@@ -753,12 +897,12 @@ class PairSet:
 
     __slots__ = ("_data",)
 
-    _data: Dict[str, Dict[str, bool]]
+    _data: Dict[Any, Dict[Any, bool]]
 
     def __init__(self) -> None:
         self._data = {}
 
-    def has(self, a: str, b: str, are_mutually_exclusive: bool) -> bool:
+    def has(self, a: Any, b: Any, are_mutually_exclusive: bool) -> bool:
         key1, key2 = (a, b) if a < b else (b, a)
 
         map_ = self._data.get(key1)
@@ -773,7 +917,7 @@ class PairSet:
         # we have to ensure it was added as such.
         return True if are_mutually_exclusive else are_mutually_exclusive == result
 
-    def add(self, a: str, b: str, are_mutually_exclusive: bool) -> None:
+    def add(self, a: Any, b: Any, are_mutually_exclusive: bool) -> None:
         key1, key2 = (a, b) if a < b else (b, a)
 
         map_ = self._data.get(key1)

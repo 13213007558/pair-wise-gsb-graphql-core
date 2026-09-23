@@ -2,7 +2,7 @@ from operator import attrgetter
 from typing import Any, Collection
 
 from ...error import GraphQLError
-from ...language import ArgumentNode, DirectiveNode, FieldNode
+from ...language import ArgumentNode, DirectiveNode, FieldNode, FragmentSpreadNode
 from ...pyutils import group_by
 from . import ASTValidationRule
 
@@ -23,6 +23,11 @@ class UniqueArgumentNamesRule(ASTValidationRule):
 
     def enter_directive(self, node: DirectiveNode, *args: Any) -> None:
         self.check_arg_uniqueness(node.arguments)
+
+    def enter_fragment_spread(self, node: FragmentSpreadNode, *args: Any) -> None:
+        # Experimental: fragment spread arguments (fragment arguments feature)
+        if node.arguments:
+            self.check_arg_uniqueness(node.arguments)
 
     def check_arg_uniqueness(self, argument_nodes: Collection[ArgumentNode]) -> None:
         seen_args = group_by(argument_nodes, attrgetter("name.value"))

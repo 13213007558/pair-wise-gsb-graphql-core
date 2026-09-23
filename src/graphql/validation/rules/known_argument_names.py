@@ -5,6 +5,7 @@ from ...language import (
     ArgumentNode,
     DirectiveDefinitionNode,
     DirectiveNode,
+    FragmentSpreadNode,
     SKIP,
     VisitorAction,
 )
@@ -80,6 +81,10 @@ class KnownArgumentNamesRule(KnownArgumentNamesOnDirectivesRule):
 
     def enter_argument(self, arg_node: ArgumentNode, *args: Any) -> None:
         context = self.context
+        if isinstance(args[3][-1], FragmentSpreadNode):
+            # Arguments of fragment spreads (experimental fragment arguments
+            # feature) are checked in ``enter_fragment_spread`` below.
+            return
         arg_def = context.get_argument()
         field_def = context.get_field_def()
         parent_type = context.get_parent_type()
@@ -96,3 +101,32 @@ class KnownArgumentNamesRule(KnownArgumentNamesOnDirectivesRule):
                     arg_node,
                 )
             )
+
+    def enter_fragment_spread(
+        self, spread_node: FragmentSpreadNode, *_args: Any
+    ) -> None:
+        # Experimental: check arguments of fragment spreads against the
+        # variable definitions of the referenced fragment.
+        arg_nodes = spread_node.arguments
+        if not arg_nodes:
+            return
+        fragment_name = spread_node.name.value
+        fragment = self.context.get_fragment(fragment_name)
+        if not fragment:
+            return
+        known_arg_names = [
+            var_def.variable.name.value
+            for var_def in fragment.variable_definitions or ()
+        ]
+        for arg_node in arg_nodes:
+            arg_name = arg_node.name.value
+            if arg_name not in known_arg_names:
+                suggestions = suggestion_list(arg_name, known_arg_names)
+                self.report_error(
+                    GraphQLError(
+                        f"Unknown argument '{arg_name}'"
+                        f" on fragment '{fragment_name}'."
+                        + did_you_mean(suggestions),
+                        arg_node,
+                    )
+                )

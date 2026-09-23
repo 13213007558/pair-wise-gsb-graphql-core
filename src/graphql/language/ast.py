@@ -252,7 +252,7 @@ QUERY_DOCUMENT_KEYS: Dict[str, Tuple[str, ...]] = {
     "selection_set": ("selections",),
     "field": ("alias", "name", "arguments", "directives", "selection_set"),
     "argument": ("name", "value"),
-    "fragment_spread": ("name", "directives"),
+    "fragment_spread": ("name", "arguments", "directives"),
     "inline_fragment": ("type_condition", "directives", "selection_set"),
     "fragment_definition": (
         # Note: fragment variable definitions are deprecated and will be removed in v3.3
@@ -478,9 +478,10 @@ class ConstArgumentNode(ArgumentNode):
 
 
 class FragmentSpreadNode(SelectionNode):
-    __slots__ = ("name",)
+    __slots__ = "name", "arguments"
 
     name: NameNode
+    arguments: Tuple["ArgumentNode", ...]
 
 
 class InlineFragmentNode(SelectionNode):

@@ -176,6 +176,7 @@ async def execute_subscription(context: ExecutionContext) -> AsyncIterable[Any]:
         context.variable_values,
         root_type,
         context.operation.selection_set,
+        context._field_scopes,
     )
     response_name, field_nodes = next(iter(root_fields.items()))
     field_def = get_field_def(schema, root_type, field_nodes[0])
@@ -195,7 +196,11 @@ async def execute_subscription(context: ExecutionContext) -> AsyncIterable[Any]:
     try:
         # Build a dictionary of arguments from the field.arguments AST, using the
         # variables scope to fulfill any variable references.
-        args = get_argument_values(field_def, field_nodes[0], context.variable_values)
+        args = get_argument_values(
+            field_def,
+            field_nodes[0],
+            context.get_variable_values_for_field(field_nodes[0]),
+        )
 
         # Call the `subscribe()` resolver or the default resolver to produce an
         # AsyncIterable yielding raw payloads.

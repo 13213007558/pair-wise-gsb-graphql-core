@@ -7,6 +7,8 @@ from ..language import (
     ExecutableDefinitionNode,
     FieldDefinitionNode,
     FieldNode,
+    FragmentDefinitionNode,
+    FragmentSpreadNode,
     InputValueDefinitionNode,
     NullValueNode,
     SchemaDefinitionNode,
@@ -31,7 +33,12 @@ from ..utilities.coerce_input_value import coerce_input_value
 from ..utilities.type_from_ast import type_from_ast
 from ..utilities.value_from_ast import value_from_ast
 
-__all__ = ["get_argument_values", "get_directive_values", "get_variable_values"]
+__all__ = [
+    "get_argument_values",
+    "get_directive_values",
+    "get_fragment_variable_values",
+    "get_variable_values",
+]
 
 
 CoercedVariableValues = Union[List[GraphQLError], Dict[str, Any]]
@@ -214,6 +221,102 @@ def get_argument_values(
                 value_node,
             )
         coerced_values[arg_def.out_name or name] = coerced_value
+
+    return coerced_values
+
+
+def get_fragment_variable_values(
+    schema: GraphQLSchema,
+    fragment_def_node: FragmentDefinitionNode,
+    spread_node: FragmentSpreadNode,
+    variable_values: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Get coerced values for the parameters of a fragment.
+
+    Evaluates the arguments of a fragment spread against the variable
+    definitions of the referenced fragment definition, using the variable
+    values of the enclosing scope. This is used to support the experimental
+    fragment arguments feature.
+
+    Returns a dict with an entry for each fragment parameter that has been
+    provided at the spread site or defines a default value. Parameters
+    without a provided argument and without a default value are missing
+    from the dict, which means they are treated as not provided (shadowing
+    any operation variable with the same name).
+    """
+    coerced_values: Dict[str, Any] = {}
+    arg_node_map = {arg.name.value: arg for arg in spread_node.arguments or ()}
+    fragment_name = fragment_def_node.name.value
+
+    for var_def_node in fragment_def_node.variable_definitions or ():
+        var_name = var_def_node.variable.name.value
+        var_type = type_from_ast(schema, var_def_node.type)
+        if not is_input_type(var_type):
+            # Must use input types for fragment parameters. This should be
+            # caught during validation, however is checked again here for
+            # safety.
+            var_type_str = print_ast(var_def_node.type)
+            raise GraphQLError(
+                f"Fragment '${fragment_name}' parameter '${var_name}' expected"
+                f" value of type '{var_type_str}' which cannot be used"
+                " as an input type.",
+                var_def_node.type,
+            )
+
+        var_type = cast(GraphQLInputType, var_type)
+        argument_node = arg_node_map.get(var_name)
+
+        if argument_node is None:
+            if var_def_node.default_value is not None:
+                coerced_values[var_name] = value_from_ast(
+                    var_def_node.default_value, var_type
+                )
+            elif is_non_null_type(var_type):
+                raise GraphQLError(
+                    f"Fragment '{fragment_name}' argument '{var_name}'"
+                    f" of required type '{inspect(var_type)}'"
+                    " was not provided.",
+                    spread_node,
+                )
+            continue
+
+        value_node = argument_node.value
+        if isinstance(value_node, VariableNode):
+            variable_name = value_node.name.value
+            if variable_values is None or variable_name not in variable_values:
+                # The variable was not provided a runtime value, so the
+                # argument is treated as not provided.
+                if var_def_node.default_value is not None:
+                    coerced_values[var_name] = value_from_ast(
+                        var_def_node.default_value, var_type
+                    )
+                elif is_non_null_type(var_type):
+                    raise GraphQLError(
+                        f"Fragment '{fragment_name}' argument '{var_name}'"
+                        f" of required type '{inspect(var_type)}' was provided"
+                        f" the variable '${variable_name}' which was not"
+                        " provided a runtime value.",
+                        value_node,
+                    )
+                continue
+
+        coerced_value = value_from_ast(value_node, var_type, variable_values)
+        if coerced_value is Undefined:
+            # Note: validation should catch this before execution. This is a
+            # runtime check to ensure execution does not continue with an
+            # invalid argument value.
+            raise GraphQLError(
+                f"Fragment '{fragment_name}' argument '{var_name}'"
+                f" has invalid value {print_ast(value_node)}.",
+                value_node,
+            )
+        if coerced_value is None and is_non_null_type(var_type):
+            raise GraphQLError(
+                f"Fragment '{fragment_name}' argument '{var_name}'"
+                f" of non-null type '{inspect(var_type)}' must not be null.",
+                value_node,
+            )
+        coerced_values[var_name] = coerced_value
 
     return coerced_values
 
