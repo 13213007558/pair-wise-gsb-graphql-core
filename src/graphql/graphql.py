@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .error import GraphQLError
 from .execution import ExecutionResult, Executor, Middleware
+from .execution.cost_analysis import CostLimit
 from .execution.execute import assume_not_async_iterable, assume_not_awaitable
 from .harness import GraphQLHarness, default_harness
 from .pyutils.is_awaitable import is_awaitable as default_is_awaitable
@@ -52,6 +53,7 @@ async def graphql(  # noqa: PLR0913, PLR0917
     max_lexical_tokens: int | None = None,
     max_comments: int | None = None,
     max_source_length: int | None = None,
+    cost_limit: CostLimit | None = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation asynchronously.
 
@@ -111,6 +113,9 @@ async def graphql(  # noqa: PLR0913, PLR0917
         to limit the memory used by comments in the token linked list.
     :param max_source_length: The maximum length of the source text in code points,
         checked before lexing.
+    :param cost_limit: Optional pre-execution cost limit. When set, the selected
+        operation is rejected before any resolver runs when its estimated cost
+        exceeds the limit. When not set, execution behavior is unchanged.
     :returns: An execution result or validation errors.
 
     Execute a complete asynchronous request with variables:
@@ -225,6 +230,7 @@ async def graphql(  # noqa: PLR0913, PLR0917
         max_lexical_tokens,
         max_comments,
         max_source_length,
+        cost_limit,
     )
 
     if default_is_awaitable(result):
@@ -256,6 +262,7 @@ def graphql_sync(  # noqa: PLR0913, PLR0917
     max_lexical_tokens: int | None = None,
     max_comments: int | None = None,
     max_source_length: int | None = None,
+    cost_limit: CostLimit | None = None,
 ) -> ExecutionResult:
     """Execute a GraphQL operation synchronously.
 
@@ -307,6 +314,7 @@ def graphql_sync(  # noqa: PLR0913, PLR0917
         to limit the memory used by comments in the token linked list.
     :param max_source_length: The maximum length of the source text in code points,
         checked before lexing.
+    :param cost_limit: Optional pre-execution cost limit; see :func:`graphql`.
     :returns: Completed execution output, or request errors if parsing or
         validation fails.
 
@@ -376,6 +384,7 @@ def graphql_sync(  # noqa: PLR0913, PLR0917
         max_lexical_tokens,
         max_comments,
         max_source_length,
+        cost_limit,
     )
 
     # Assert that the execution was synchronous.
@@ -413,6 +422,7 @@ def graphql_impl(  # noqa: PLR0913, PLR0917
     max_lexical_tokens: int | None = None,
     max_comments: int | None = None,
     max_source_length: int | None = None,
+    cost_limit: CostLimit | None = None,
 ) -> AwaitableOrValue[ExecutionResult]:
     """Execute a query, return asynchronously only if necessary.
 
@@ -447,6 +457,7 @@ def graphql_impl(  # noqa: PLR0913, PLR0917
             is_async_iterable,
             hide_suggestions=hide_suggestions,
             abort_signal=abort_signal,
+            cost_limit=cost_limit,
         )
 
     def validate_and_execute(

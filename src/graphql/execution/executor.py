@@ -88,6 +88,7 @@ from .collect_fields import (
     collect_fields,
     collect_subfields,
 )
+from .cost_analysis import CostLimit, check_cost_limit
 from .get_variable_signature import get_variable_signature
 from .middleware import MiddlewareManager
 from .types import ExecutionResult, ExperimentalIncrementalExecutionResults
@@ -255,6 +256,8 @@ class Executor(Generic[TContext]):
         errors.
     :param abort_signal: External signal that may abort execution.
     :param hooks: Execution hooks supplied by the caller.
+    :param cost_limit: Optional pre-execution cost limit enforced before any
+        field resolver runs.
 
     >>> from graphql import Executor, build_schema, parse
     >>> schema = build_schema('type Query { greeting: String }')
@@ -369,6 +372,7 @@ class Executor(Generic[TContext]):
         hide_suggestions: bool = False,
         abort_signal: AbortSignal | None = None,
         hooks: ExecutionHooks | None = None,
+        cost_limit: CostLimit | None = None,
     ) -> None:
         self.schema = schema
         self.fragment_definitions = fragment_definitions
@@ -384,6 +388,7 @@ class Executor(Generic[TContext]):
         self.hide_suggestions = hide_suggestions
         self.abort_signal = abort_signal
         self.hooks = hooks
+        self.cost_limit = cost_limit
         self.async_helpers = GraphQLResolveInfoHelpers(
             gather=self.gather_async_work, track=self.track_async_work
         )
@@ -426,6 +431,7 @@ class Executor(Generic[TContext]):
         hide_suggestions: bool = False,
         abort_signal: AbortSignal | None = None,
         hooks: ExecutionHooks | None = None,
+        cost_limit: CostLimit | None = None,
         **custom_args: Any,
     ) -> list[GraphQLError] | Executor:
         """Build an executor.
@@ -465,6 +471,8 @@ class Executor(Generic[TContext]):
             request errors.
         :param abort_signal: AbortSignal used to cancel execution.
         :param hooks: Execution hooks invoked during this operation.
+        :param cost_limit: Optional pre-execution cost limit enforced before any
+            field resolver runs.
         :returns: The executor for the validated execution arguments, or a list of
             validation errors.
 
@@ -595,6 +603,7 @@ class Executor(Generic[TContext]):
             hide_suggestions=hide_suggestions,
             abort_signal=abort_signal,
             hooks=hooks,
+            cost_limit=cost_limit,
             **custom_args,
         )
 
@@ -716,6 +725,10 @@ class Executor(Generic[TContext]):
 
             grouped_field_set, new_defer_usages, _forbidden = collected_fields
 
+            cost_error = self.check_operation_cost()
+            if cost_error is not None:
+                raise cost_error
+
             result = self.execute_collected_root_fields(
                 root_type,
                 root_value,
@@ -755,6 +768,28 @@ class Executor(Generic[TContext]):
             return self.finish(self.build_response(None))
 
         return self.finish(self.build_response(data))
+
+    def check_operation_cost(self) -> GraphQLError | None:
+        """Check the operation against the configured pre-execution cost limit.
+
+        Runs after variable and argument coercion, but before any field resolver
+        is invoked. Returns a located :class:`GraphQLError` when the estimated
+        cost exceeds the limit, and ``None`` when no cost limit is configured or
+        the operation is within the limit.
+
+        :meta private:
+        """
+        cost_limit = self.cost_limit
+        if cost_limit is None:
+            return None
+        return check_cost_limit(
+            self.schema,
+            self.fragments,
+            self.operation,
+            self.variable_values,
+            cost_limit,
+            self.hide_suggestions,
+        )
 
     def execute_collected_root_fields(
         self,

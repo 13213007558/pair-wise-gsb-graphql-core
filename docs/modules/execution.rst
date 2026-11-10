@@ -89,3 +89,26 @@ Execution
 .. autofunction:: get_variable_values
 
 .. autoclass:: VariableValues
+
+Pre-execution cost analysis
+---------------------------
+
+.. autoclass:: CostLimit
+
+.. autoclass:: FieldCost
+
+.. autoclass:: FieldCostInfo
+
+.. autoclass:: CostCallback
+
+.. autoclass:: OperationCost
+
+.. autoclass:: CostBreakdownEntry
+
+.. autodata:: COST_EXTENSION_KEY
+
+.. autofunction:: get_operation_cost
+
+.. autofunction:: check_cost_limit
+
+.. autofunction:: default_cost_callback
