@@ -1,0 +1,544 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "coro-t1-before-start",
+      "title": "Abort before execute() is called",
+      "kind": "coroutine",
+      "timing": "before_start",
+      "outcome": "abort_reason",
+      "outcome_detail": "RuntimeError: client gone (t1)",
+      "counts": {},
+      "state": {},
+      "orphan_tasks": [],
+      "events": []
+    },
+    {
+      "case_id": "coro-t2-while-waiting",
+      "title": "Abort while the coroutine resolver is awaiting",
+      "kind": "coroutine",
+      "timing": "while_waiting",
+      "outcome": "aborted_error",
+      "outcome_detail": "RuntimeError: client gone (t2)",
+      "counts": {
+        "started": 1,
+        "cancel_notice": 1,
+        "finally": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "a"
+        },
+        {
+          "seq": 1,
+          "kind": "cancel_notice",
+          "work": "a",
+          "mechanism": "task.cancel"
+        },
+        {
+          "seq": 2,
+          "kind": "finally",
+          "work": "a"
+        }
+      ]
+    },
+    {
+      "case_id": "coro-t3-after-field-done",
+      "title": "Abort just after one sibling field completed",
+      "kind": "coroutine",
+      "timing": "after_field_done",
+      "outcome": "aborted_error",
+      "outcome_detail": "RuntimeError: client gone (t3)",
+      "counts": {
+        "started": 1,
+        "cancel_notice": 1,
+        "finally": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "b"
+        },
+        {
+          "seq": 1,
+          "kind": "cancel_notice",
+          "work": "b",
+          "mechanism": "task.cancel"
+        },
+        {
+          "seq": 2,
+          "kind": "finally",
+          "work": "b"
+        }
+      ]
+    },
+    {
+      "case_id": "coro-t2-cooperative",
+      "title": "Cooperative resolver awaiting info.abort_signal.wait()",
+      "kind": "coroutine",
+      "timing": "while_waiting_cooperative",
+      "outcome": "aborted_error",
+      "outcome_detail": "RuntimeError: client gone (coop)",
+      "counts": {
+        "started": 1,
+        "signal_observed": 1,
+        "finally": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "a"
+        },
+        {
+          "seq": 1,
+          "kind": "signal_observed",
+          "work": "a"
+        },
+        {
+          "seq": 2,
+          "kind": "finally",
+          "work": "a"
+        }
+      ]
+    },
+    {
+      "case_id": "future-t2-returned-directly",
+      "title": "Resolver returns the shared Future directly",
+      "kind": "shared_future",
+      "timing": "while_waiting",
+      "outcome": "aborted_error",
+      "outcome_detail": "RuntimeError: client gone (future)",
+      "counts": {
+        "started": 1
+      },
+      "state": {
+        "adapter": "returns_future_directly",
+        "shared_future_done": true,
+        "shared_future_cancelled": true,
+        "shared_future_owner_settled": false
+      },
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "shared"
+        }
+      ]
+    },
+    {
+      "case_id": "future-t2-plain-await-cancels-shared",
+      "title": "Plain await of shared Future: abort cancels the business-owned object too",
+      "kind": "shared_future",
+      "timing": "while_waiting",
+      "outcome": "aborted_error",
+      "outcome_detail": "RuntimeError: client gone (future)",
+      "counts": {
+        "started": 1,
+        "cancel_notice": 1,
+        "finally": 1
+      },
+      "state": {
+        "adapter": "awaits_future",
+        "shared_future_done": true,
+        "shared_future_cancelled": true,
+        "shared_future_owner_settled": false
+      },
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "shared"
+        },
+        {
+          "seq": 1,
+          "kind": "cancel_notice",
+          "work": "shared",
+          "mechanism": "plain await propagates cancel"
+        },
+        {
+          "seq": 2,
+          "kind": "finally",
+          "work": "shared"
+        }
+      ]
+    },
+    {
+      "case_id": "future-t2-shielded-then-owner-settles",
+      "title": "asyncio.shield around the shared Future; owner settles later",
+      "kind": "shared_future",
+      "timing": "while_waiting",
+      "outcome": "aborted_error",
+      "outcome_detail": "RuntimeError: client gone (future)",
+      "counts": {
+        "started": 1,
+        "cancel_notice": 1,
+        "finally": 1
+      },
+      "state": {
+        "adapter": "shields_future",
+        "shared_future_done": true,
+        "shared_future_cancelled": false,
+        "shared_future_owner_settled": true
+      },
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "shared"
+        },
+        {
+          "seq": 1,
+          "kind": "cancel_notice",
+          "work": "shared",
+          "mechanism": "shield outer.cancel"
+        },
+        {
+          "seq": 2,
+          "kind": "finally",
+          "work": "shared"
+        }
+      ]
+    },
+    {
+      "case_id": "sync-t3-parallel-while-blocking",
+      "title": "Abort during a blocking sync resolver; parallel query has no check between fields",
+      "kind": "sync",
+      "timing": "while_running_blocking",
+      "outcome": "result",
+      "outcome_detail": "ExecutionResult returned",
+      "counts": {
+        "started": 2,
+        "completed": 2
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "a"
+        },
+        {
+          "seq": 1,
+          "kind": "completed",
+          "work": "a"
+        },
+        {
+          "seq": 2,
+          "kind": "started",
+          "work": "b"
+        },
+        {
+          "seq": 3,
+          "kind": "completed",
+          "work": "b"
+        }
+      ]
+    },
+    {
+      "case_id": "sync-t3-parallel-inline-abort",
+      "title": "Parallel query: abort after field a, field b still runs, abort seen at finish()",
+      "kind": "sync",
+      "timing": "after_field_done_parallel",
+      "outcome": "aborted_error",
+      "outcome_detail": "RuntimeError: client gone (sync parallel)",
+      "counts": {
+        "started": 2,
+        "completed": 2,
+        "signal_observed": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "a"
+        },
+        {
+          "seq": 1,
+          "kind": "completed",
+          "work": "a"
+        },
+        {
+          "seq": 2,
+          "kind": "started",
+          "work": "b"
+        },
+        {
+          "seq": 3,
+          "kind": "signal_observed",
+          "work": "b",
+          "chunk": 1
+        },
+        {
+          "seq": 4,
+          "kind": "completed",
+          "work": "b"
+        }
+      ]
+    },
+    {
+      "case_id": "sync-serial-mutation",
+      "title": "Serial mutation: abort after m1, before m2 starts",
+      "kind": "sync",
+      "timing": "after_field_done_serial",
+      "outcome": "abort_reason",
+      "outcome_detail": "RuntimeError: client gone (mutation)",
+      "counts": {
+        "started": 1,
+        "completed": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "m1"
+        },
+        {
+          "seq": 1,
+          "kind": "completed",
+          "work": "m1"
+        }
+      ]
+    },
+    {
+      "case_id": "sync-t1-before-start",
+      "title": "Abort before start: synchronous resolvers never invoked",
+      "kind": "sync",
+      "timing": "before_start",
+      "outcome": "abort_reason",
+      "outcome_detail": "RuntimeError: client gone (sync t1)",
+      "counts": {},
+      "state": {},
+      "orphan_tasks": [],
+      "events": []
+    },
+    {
+      "case_id": "sub-t1-before-start",
+      "title": "Abort before subscribe(): source never started",
+      "kind": "subscription",
+      "timing": "before_start",
+      "outcome": "abort_reason",
+      "outcome_detail": "RuntimeError: client gone (sub t1)",
+      "counts": {
+        "aclose": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "aclose",
+          "work": "src",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "sub-t2-generator-waiting",
+      "title": "Abort while generator source awaits next event, then aclose()",
+      "kind": "subscription",
+      "timing": "while_waiting",
+      "outcome": "abort_reason",
+      "outcome_detail": "RuntimeError: client gone (sub t2 gen)",
+      "counts": {
+        "started": 1,
+        "delivered": 1,
+        "cancel_notice": 1,
+        "finally": 1,
+        "aclose": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "src"
+        },
+        {
+          "seq": 1,
+          "kind": "delivered",
+          "work": "src",
+          "index": 0
+        },
+        {
+          "seq": 2,
+          "kind": "cancel_notice",
+          "work": "src",
+          "mechanism": "anext task.cancel",
+          "index": 1
+        },
+        {
+          "seq": 3,
+          "kind": "finally",
+          "work": "src"
+        },
+        {
+          "seq": 4,
+          "kind": "aclose",
+          "work": "src",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "sub-t2-class-waiting",
+      "title": "Abort while custom iterator awaits next event, then aclose()",
+      "kind": "subscription",
+      "timing": "while_waiting_class",
+      "outcome": "abort_reason",
+      "outcome_detail": "RuntimeError: client gone (sub t2 class)",
+      "counts": {
+        "started": 1,
+        "delivered": 1,
+        "cancel_notice": 1,
+        "aclose": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "src"
+        },
+        {
+          "seq": 1,
+          "kind": "delivered",
+          "work": "src",
+          "index": 0
+        },
+        {
+          "seq": 2,
+          "kind": "cancel_notice",
+          "work": "src",
+          "mechanism": "anext task.cancel",
+          "index": 1
+        },
+        {
+          "seq": 3,
+          "kind": "aclose",
+          "work": "src",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "sub-t4-after-event",
+      "title": "Abort after events delivered; next __anext__ raises, then aclose()",
+      "kind": "subscription",
+      "timing": "after_event_delivered",
+      "outcome": "abort_reason",
+      "outcome_detail": "RuntimeError: client gone (sub t4)",
+      "counts": {
+        "started": 1,
+        "delivered": 2,
+        "finally": 1,
+        "aclose": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "src"
+        },
+        {
+          "seq": 1,
+          "kind": "delivered",
+          "work": "src",
+          "index": 0
+        },
+        {
+          "seq": 2,
+          "kind": "delivered",
+          "work": "src",
+          "index": 1
+        },
+        {
+          "seq": 3,
+          "kind": "finally",
+          "work": "src"
+        },
+        {
+          "seq": 4,
+          "kind": "aclose",
+          "work": "src",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "sub-t4-abandoned",
+      "title": "Idle abort, consumer drops stream without aclose(); source stays suspended",
+      "kind": "subscription",
+      "timing": "after_event_abandoned",
+      "outcome": "result",
+      "outcome_detail": "ExecutionResult returned",
+      "counts": {
+        "started": 1,
+        "delivered": 1,
+        "pre_gc_source_suspended": 1,
+        "aclose": 1,
+        "finally": 1,
+        "post_gc_source_still_suspended": 1
+      },
+      "state": {},
+      "orphan_tasks": [],
+      "events": [
+        {
+          "seq": 0,
+          "kind": "started",
+          "work": "src"
+        },
+        {
+          "seq": 1,
+          "kind": "delivered",
+          "work": "src",
+          "index": 0
+        },
+        {
+          "seq": 2,
+          "kind": "pre_gc_source_suspended",
+          "work": "src",
+          "suspended": true
+        },
+        {
+          "seq": 3,
+          "kind": "aclose",
+          "work": "src",
+          "count": 1
+        },
+        {
+          "seq": 4,
+          "kind": "finally",
+          "work": "src"
+        },
+        {
+          "seq": 5,
+          "kind": "post_gc_source_still_suspended",
+          "work": "src",
+          "suspended": false
+        }
+      ]
+    }
+  ]
+}
